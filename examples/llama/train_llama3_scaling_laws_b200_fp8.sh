@@ -35,7 +35,7 @@ CP_SIZE=1
 PP_SIZE=1     
 MICRO_BATCH_SIZE=1
 GLOBAL_BATCH_SIZE=128
-DTYPE="fp8"
+DTYPE="fp8" #"bf16" in case one wants to compute MFU against peak bf16 flops
 SEQ_LENGTH=8192
 MAX_POSITION_EMBEDDINGS=8192
 
@@ -122,7 +122,7 @@ TRAINING_ARGS=(
     --calculate-per-token-loss 
     --manual-gc 
     --empty-unused-memory-level 1 
-    --exit-duration-in-mins 235 
+    #--exit-duration-in-mins 235 
 )
 
 # Conditional arguments based on DTYPE (FP8)
@@ -130,6 +130,7 @@ DTYPE_ARGS=()
 if [[ "$DTYPE" == "fp8" ]]; then
     DTYPE_ARGS+=(
         "--fp8-format hybrid"
+        #"--fp8-recipe blockwise" # speedup for B200, but needs higher CUDA
         "--fp8-amax-history-len 1024"
         "--fp8-amax-compute-algo max"
         "--fp8-param-gather"
@@ -189,10 +190,12 @@ EVAL_AND_LOGGING_ARGS=(
     --eval-iters 32
     --eval-interval 100
     --save-interval 1000
+    --save-retain-interval 5000
     --log-throughput
     --profile
     --profile-step-start 4
     --profile-step-end 6
+    #--use-pytorch-profiler # if pytorch profiler trace needed
     --ckpt-format torch_dist 
     --distributed-timeout-minutes 60
     --save "$CHECKPOINT_PATH"
