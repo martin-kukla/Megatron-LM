@@ -168,9 +168,11 @@ def main():
     )
     hidden_size = best[0]
     num_layers = best[1]
+    # Format total steps S in a compact scientific notation (e.g. 10000 -> 1e4, 15000 -> 1.5e4)
+    s_str = f"{S:.1e}".replace("+0", "").replace("+", "").replace(".0e", "e")
     
-    ckpt_dir = f"~/checkpoints/llama3_h{hidden_size}_l{num_layers}_s{S}_fp8"
-    tb_dir = f"~/tensorboard_logs/llama3_h{hidden_size}_l{num_layers}_s{S}_fp8"
+    ckpt_dir = f"~/checkpoints/llama3_h{hidden_size}_l{num_layers}_s{s_str}_fp8"
+    tb_dir = f"~/tensorboard_logs/llama3_h{hidden_size}_l{num_layers}_s{s_str}_fp8"
     
     print(f"\n  HIDDEN_SIZE={hidden_size} NUM_LAYERS={num_layers} TOTAL_STEPS={S} \\")
     print(f"    ./examples/llama/train_llama3_scaling_laws_b200_fp8.sh \\")
