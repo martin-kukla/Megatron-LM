@@ -285,17 +285,23 @@ def compute_and_print_table(C, D, gbs, args):
     ckpt_dir = f"~/checkpoints/llama3_{run_tag}_{arch_tag}_fp8"
     tb_dir   = f"~/tensorboard_logs/llama3_{run_tag}_{arch_tag}_fp8"
 
-    print(f"\n  # D={fmt_sci(D)} tokens  →  GBS={gbs}  →  S={S:,} steps")
-    print(
-        f"  PEAK_LR={peak_lr:.2e} GLOBAL_BATCH_SIZE={gbs} "
-        f"HIDDEN_SIZE={hidden_size} NUM_LAYERS={num_layers} TOTAL_STEPS={S} \\"
-    )
-    print(f"    ./examples/llama/train_llama3_scaling_laws_b200_fp8.sh \\")
-    print(f"        {ckpt_dir} \\")
-    print(f"        {tb_dir} \\")
-    print(f"        meta-llama/Meta-Llama-3-8B \\")
-    print(f"        ~/pile_tokenized/pile_llama3_text_document")
+    # Command lines without leading spaces so the summary is directly copy-pasteable
+    cmd_lines = [
+        f"# D={fmt_sci(D)} tokens  GBS={gbs}  S={S:,} steps",
+        f"PEAK_LR={peak_lr:.2e} GLOBAL_BATCH_SIZE={gbs} "
+        f"HIDDEN_SIZE={hidden_size} NUM_LAYERS={num_layers} TOTAL_STEPS={S} \\",
+        f"  ./examples/llama/train_llama3_scaling_laws_b200_fp8.sh \\",
+        f"    {ckpt_dir} \\",
+        f"    {tb_dir} \\",
+        f"    meta-llama/Meta-Llama-3-8B \\",
+        f"    ~/pile_tokenized/pile_llama3_text_document",
+    ]
+    # Inline (per-sweep) print: indent for readability
+    for line in cmd_lines:
+        print(f"  {line}")
     print()
+    # Return clean (no leading spaces) for the summary block
+    return "\n".join(cmd_lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -378,12 +384,25 @@ def main():
 
         # Sweep D around the Chinchilla optimum; GBS is FIXED
         multipliers = [0.25, 0.5, 1.0, 2.0, 4.0]
+        all_commands = []
         for mult in multipliers:
             D = D_opt * mult
             print(f"\n\n{'─'*70}")
             print(f" SWEEP: {mult:.2f}x Chinchilla-optimal tokens  →  D = {D:.2e}")
             print(f"{'─'*70}")
-            compute_and_print_table(args.flops, D, gbs, args)
+            cmd = compute_and_print_table(args.flops, D, gbs, args)
+            if cmd:
+                all_commands.append(cmd)
+
+        # Print summary of all commands at the very end — copy-paste ready
+        print(f"\n\n{'='*70}")
+        print(f" ALL COMMANDS SUMMARY — copy-paste the block below into your terminal")
+        print(f" C={args.flops:.1e}, GBS={gbs} (fixed)")
+        print(f"{'='*70}")
+        print()
+        for cmd in all_commands:
+            print(cmd)
+            print()
 
 
 if __name__ == "__main__":
