@@ -24,10 +24,36 @@ import math
 HEAD_DIM = 128
 GQA_RATIO = 4
 FFN_MULTIPLIER = 3.5  # ffn_hidden_size = 3.5 × hidden_size
-GLOBAL_BATCH_SIZE = 128
 SEQ_LENGTH = 8192
 VOCAB_SIZE = 128256
 HIDDEN_SIZE_STEP = HEAD_DIM * GQA_RATIO  # 512, minimum granularity
+
+# LLaMA 3 empirical optimal Global Batch Size (GBS) lookup table for seq_length=8192.
+# Derived from the LLaMA 3 scaling law experiments (C from 6e18 to 1e22, batch from 250K to 4M tokens)
+# B_tokens = 250,000 * (C / 6e18)^0.3736
+LLAMA3_GBS_LOOKUP = {
+    6e18: 32,    # ~250K tokens
+    1e19: 40,    # ~300K tokens
+    3e19: 64,    # ~450K tokens
+    6e19: 80,    # ~590K tokens
+    1e20: 96,    # ~710K tokens
+    3e20: 128,   # ~1.05M tokens
+    6e20: 160,   # ~1.36M tokens
+    1e21: 192,   # ~1.64M tokens
+    3e21: 256,   # ~2.42M tokens
+    1e22: 512,   # ~4.00M tokens
+}
+
+def get_gbs_for_flops(flops):
+    """Return GBS based on LLaMA 3 empirical table or interpolation."""
+    if flops in LLAMA3_GBS_LOOKUP:
+        return LLAMA3_GBS_LOOKUP[flops]
+    
+    # Fallback to power-law interpolation if not exactly in table
+    b_tokens = 250000 * ((flops / 6e18) ** 0.3736)
+    gbs_approx = b_tokens / SEQ_LENGTH
+    # Snap to nearest multiple of 16
+    return max(16, int(round(gbs_approx / 16)) * 16)
 
 
 def params_per_layer(d):
@@ -142,7 +168,7 @@ def compute_and_print_table(C, S, args):
     ckpt_dir = f"~/checkpoints/llama3_h{hidden_size}_l{num_layers}_s{s_str}_fp8"
     tb_dir = f"~/tensorboard_logs/llama3_h{hidden_size}_l{num_layers}_s{s_str}_fp8"
     
-    print(f"\n  HIDDEN_SIZE={hidden_size} NUM_LAYERS={num_layers} TOTAL_STEPS={S} \\")
+    print(f"\n  GLOBAL_BATCH_SIZE={args.gbs} HIDDEN_SIZE={hidden_size} NUM_LAYERS={num_layers} TOTAL_STEPS={S} \\")
     print(f"    ./examples/llama/train_llama3_scaling_laws_b200_fp8.sh \\")
     print(f"        {ckpt_dir} \\")
     print(f"        {tb_dir} \\")
@@ -162,8 +188,8 @@ def main():
         "--total-steps", type=int, required=False, default=None, help="Total training steps (optional, if omitted will sweep around Chinchilla optimal)"
     )
     parser.add_argument(
-        "--gbs", type=int, default=GLOBAL_BATCH_SIZE,
-        help=f"Global batch size (default: {GLOBAL_BATCH_SIZE})",
+        "--gbs", type=int, default=None,
+        help="Global batch size. If omitted, uses LLaMA 3 empirical optimal mapping.",
     )
     parser.add_argument(
         "--seq-length", type=int, default=SEQ_LENGTH,
@@ -182,6 +208,10 @@ def main():
         "--max-hidden", type=int, default=8192, help="Maximum hidden size (default: 8192)"
     )
     args = parser.parse_args()
+
+    if args.gbs is None:
+        args.gbs = get_gbs_for_flops(args.flops)
+        print(f"\n[INFO] Auto-selected GBS={args.gbs} based on FLOPs budget (C={args.flops:.2e})")
 
     if args.total_steps is not None:
         compute_and_print_table(args.flops, args.total_steps, args)
