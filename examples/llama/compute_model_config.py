@@ -12,8 +12,8 @@ Architecture conventions (matching train_llama3_scaling_laws_b200_fp8.sh):
   - GBS = 128, seq_length = 8192
 
 Usage:
-    python3 compute_model_config.py --flops 1e19 --total-steps 10000
-    python3 compute_model_config.py --flops 6e18 --total-steps 5000 --gbs 128
+    python3 examples/llama/compute_model_config.py --flops 1e19 --total-steps 10000
+    python3 examples/llama/compute_model_config.py --flops 6e18 --total-steps 5000 --gbs 128
 """
 
 import argparse
@@ -110,10 +110,11 @@ def main():
     print(f"  Tokens/step:       {args.gbs} × {args.seq_length:,} = {args.gbs * args.seq_length:,}")
     print(f"  Total tokens (D):  {D:.2e}")
     print(f"  Target N (C/6D):   {N_target:.2e}  ({format_params(N_target)})")
+    print(f"  Reference W/D:     128.0  (LLaMA 3 8B is 4096 / 32 = 128)")
     print()
 
     header = (
-        f"{'HIDDEN':>8}  {'LAYERS':>6}  {'N (non-emb)':>14}  {'N (total)':>14}  "
+        f"{'HIDDEN':>8}  {'LAYERS':>6}  {'W/D':>6}  {'N (non-emb)':>14}  {'N (total)':>14}  "
         f"{'Actual C':>12}  {'C/target':>8}  {'heads':>5}  {'GQA':>4}  {'FFN':>7}"
     )
     print(header)
@@ -135,17 +136,18 @@ def main():
         num_query_groups = max(1, num_heads // GQA_RATIO)
         ffn = int(d * FFN_MULTIPLIER)
 
+        aspect_ratio = d / L if L > 0 else 0
         results.append(
-            (d, L, N_actual, N_total, C_actual, C_ratio, num_heads, num_query_groups, ffn)
+            (d, L, aspect_ratio, N_actual, N_total, C_actual, C_ratio, num_heads, num_query_groups, ffn)
         )
 
-    # Sort by how close actual C is to the budget
-    results.sort(key=lambda x: abs(1.0 - x[5]))
+    # Sort by within 10% FLOP budget first, then by closest to W/D = 128
+    results.sort(key=lambda x: (abs(1.0 - x[6]) > 0.10, abs(128 - x[2]), abs(1.0 - x[6])))
 
-    for d, L, N_actual, N_total, C_actual, C_ratio, num_heads, gqa, ffn in results:
-        marker = " ◄" if abs(C_ratio - 1.0) < 0.05 else ""
+    for d, L, aspect_ratio, N_actual, N_total, C_actual, C_ratio, num_heads, gqa, ffn in results:
+        marker = " ◄" if abs(C_ratio - 1.0) <= 0.10 else ""
         print(
-            f"{d:>8}  {L:>6}  {N_actual:>14,.0f}  {N_total:>14,.0f}  "
+            f"{d:>8}  {L:>6}  {aspect_ratio:>6.1f}  {N_actual:>14,.0f}  {N_total:>14,.0f}  "
             f"{C_actual:>12.2e}  {C_ratio:>7.1%}{marker:>3}  {num_heads:>5}  {gqa:>4}  {ffn:>7}"
         )
 
@@ -158,11 +160,11 @@ def main():
         return
 
     # Print the best match
-    best = min(results, key=lambda x: abs(1.0 - x[5]))
+    best = results[0]
     print(
-        f"\n✓ Best match: HIDDEN_SIZE={best[0]}  NUM_LAYERS={best[1]}  "
-        f"({format_params(best[2])} non-emb params, "
-        f"actual C={best[4]:.2e}, {best[5]:.1%} of budget)"
+        f"\n✓ Best match (W/D closest to 128): HIDDEN_SIZE={best[0]}  NUM_LAYERS={best[1]}  "
+        f"({format_params(best[3])} non-emb params, "
+        f"actual C={best[5]:.2e}, {best[6]:.1%} of budget)"
     )
     print(f"\n  HIDDEN_SIZE={best[0]} NUM_LAYERS={best[1]} TOTAL_STEPS={S} \\")
     print(f"    bash examples/llama/train_llama3_scaling_laws_b200_fp8.sh")
