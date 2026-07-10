@@ -62,7 +62,7 @@ MIN_LR=$(PEAK_LR="$PEAK_LR" python3 -c "import os; print(f'{float(os.environ[\"P
 # Derived sample counts (samples = steps × global_batch_size)
 TRAIN_SAMPLES=$((TOTAL_STEPS * GLOBAL_BATCH_SIZE))
 LR_WARMUP_SAMPLES=$((LR_WARMUP_STEPS * GLOBAL_BATCH_SIZE))
-LR_DECAY_SAMPLES=$(((TOTAL_STEPS - LR_WARMUP_STEPS) * GLOBAL_BATCH_SIZE))
+LR_DECAY_SAMPLES=$((TOTAL_STEPS * GLOBAL_BATCH_SIZE))          # full training span: Megatron counts from step 0
 
 # Data cache path (useful for both mock and real data)
 DATA_CACHE_PATH="${HOME}/benchmark_cache_llama3_8b_fp8"
