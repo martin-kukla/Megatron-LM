@@ -57,7 +57,7 @@ INIT_STD=$(echo "scale=6; 1/sqrt($HIDDEN_SIZE)" | bc -l)
 TOTAL_STEPS=${TOTAL_STEPS:-10000}
 LR_WARMUP_STEPS=2000
 PEAK_LR=${PEAK_LR:-0.00015}
-MIN_LR=$(echo "$PEAK_LR * 0.1" | bc -l)  # 0.1 × peak
+MIN_LR=$(PEAK_LR="$PEAK_LR" python3 -c "import os; print(f'{float(os.environ[\"PEAK_LR\"]) * 0.1:.2e}')")  # 0.1 × peak
 
 # Derived sample counts (samples = steps × global_batch_size)
 TRAIN_SAMPLES=$((TOTAL_STEPS * GLOBAL_BATCH_SIZE))
