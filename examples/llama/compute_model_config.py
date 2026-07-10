@@ -166,8 +166,18 @@ def main():
         f"({format_params(best[3])} non-emb params, "
         f"actual C={best[5]:.2e}, {best[6]:.1%} of budget)"
     )
-    print(f"\n  HIDDEN_SIZE={best[0]} NUM_LAYERS={best[1]} TOTAL_STEPS={S} \\")
-    print(f"    bash examples/llama/train_llama3_scaling_laws_b200_fp8.sh")
+    hidden_size = best[0]
+    num_layers = best[1]
+    
+    ckpt_dir = f"~/checkpoints/llama3_h{hidden_size}_l{num_layers}_s{S}_fp8"
+    tb_dir = f"~/tensorboard_logs/llama3_h{hidden_size}_l{num_layers}_s{S}_fp8"
+    
+    print(f"\n  HIDDEN_SIZE={hidden_size} NUM_LAYERS={num_layers} TOTAL_STEPS={S} \\")
+    print(f"    ./examples/llama/train_llama3_scaling_laws_b200_fp8.sh \\")
+    print(f"        {ckpt_dir} \\")
+    print(f"        {tb_dir} \\")
+    print(f"        meta-llama/Meta-Llama-3-8B \\")
+    print(f"        ~/pile_tokenized/pile_llama3_text_document")
     print()
 
 
