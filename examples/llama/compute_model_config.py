@@ -14,6 +14,7 @@ Architecture conventions (matching train_llama3_scaling_laws_b200_fp8.sh):
 Usage:
     python3 examples/llama/compute_model_config.py --flops 1e19 --total-steps 10000
     python3 examples/llama/compute_model_config.py --flops 6e18 --total-steps 5000 --gbs 128
+    python3 examples/llama/compute_model_config.py --flops 1e19 # Sweeps around Chinchilla opt
 """
 
 import argparse
@@ -65,40 +66,7 @@ def format_params(n):
     return str(int(n))
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Compute (HIDDEN_SIZE, NUM_LAYERS) from FLOPs budget + training steps"
-    )
-    parser.add_argument(
-        "--flops", type=float, required=True, help="Total FLOPs budget (e.g., 1e19)"
-    )
-    parser.add_argument(
-        "--total-steps", type=int, required=True, help="Total training steps"
-    )
-    parser.add_argument(
-        "--gbs", type=int, default=GLOBAL_BATCH_SIZE,
-        help=f"Global batch size (default: {GLOBAL_BATCH_SIZE})",
-    )
-    parser.add_argument(
-        "--seq-length", type=int, default=SEQ_LENGTH,
-        help=f"Sequence length (default: {SEQ_LENGTH})",
-    )
-    parser.add_argument(
-        "--min-layers", type=int, default=2, help="Minimum number of layers (default: 2)"
-    )
-    parser.add_argument(
-        "--max-layers", type=int, default=64, help="Maximum number of layers (default: 64)"
-    )
-    parser.add_argument(
-        "--min-hidden", type=int, default=512, help="Minimum hidden size (default: 512)"
-    )
-    parser.add_argument(
-        "--max-hidden", type=int, default=8192, help="Maximum hidden size (default: 8192)"
-    )
-    args = parser.parse_args()
-
-    C = args.flops
-    S = args.total_steps
+def compute_and_print_table(C, S, args):
     D = S * args.gbs * args.seq_length  # total tokens
 
     # Target non-embedding params from 6ND approximation
@@ -181,6 +149,61 @@ def main():
     print(f"        meta-llama/Meta-Llama-3-8B \\")
     print(f"        ~/pile_tokenized/pile_llama3_text_document")
     print()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Compute (HIDDEN_SIZE, NUM_LAYERS) from FLOPs budget + training steps"
+    )
+    parser.add_argument(
+        "--flops", type=float, required=True, help="Total FLOPs budget (e.g., 1e19)"
+    )
+    parser.add_argument(
+        "--total-steps", type=int, required=False, default=None, help="Total training steps (optional, if omitted will sweep around Chinchilla optimal)"
+    )
+    parser.add_argument(
+        "--gbs", type=int, default=GLOBAL_BATCH_SIZE,
+        help=f"Global batch size (default: {GLOBAL_BATCH_SIZE})",
+    )
+    parser.add_argument(
+        "--seq-length", type=int, default=SEQ_LENGTH,
+        help=f"Sequence length (default: {SEQ_LENGTH})",
+    )
+    parser.add_argument(
+        "--min-layers", type=int, default=2, help="Minimum number of layers (default: 2)"
+    )
+    parser.add_argument(
+        "--max-layers", type=int, default=64, help="Maximum number of layers (default: 64)"
+    )
+    parser.add_argument(
+        "--min-hidden", type=int, default=512, help="Minimum hidden size (default: 512)"
+    )
+    parser.add_argument(
+        "--max-hidden", type=int, default=8192, help="Maximum hidden size (default: 8192)"
+    )
+    args = parser.parse_args()
+
+    if args.total_steps is not None:
+        compute_and_print_table(args.flops, args.total_steps, args)
+    else:
+        # Calculate optimal steps based on Chinchilla D = 20 * N
+        # C = 6 * N * D -> C = 6 * (D/20) * D = 0.3 * D^2 -> D = sqrt(C / 0.3) = sqrt(C * 3.3333333)
+        D_opt = math.sqrt(args.flops * 3.333333333)
+        S_opt_float = D_opt / (args.gbs * args.seq_length)
+        S_opt = int(round(S_opt_float))
+        
+        print(f"\n=====================================================================")
+        print(f" SWEEP MODE: Generating scaling law grid around Chinchilla optimum")
+        print(f" C = {args.flops:.2e} FLOPs")
+        print(f" Chinchilla Optimal D ≈ {D_opt:.2e} tokens")
+        print(f" Chinchilla Optimal S ≈ {S_opt:,} steps")
+        print(f"=====================================================================")
+        
+        multipliers = [0.25, 0.5, 1.0, 2.0, 4.0]
+        for mult in multipliers:
+            S = int(round(S_opt * mult))
+            print(f"\n\n\n=== [ SWEEP: {mult}x Optimal Steps (S = {S:,}) ] =======================================")
+            compute_and_print_table(args.flops, S, args)
 
 
 if __name__ == "__main__":
