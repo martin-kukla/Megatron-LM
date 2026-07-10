@@ -65,7 +65,7 @@ LR_WARMUP_SAMPLES=$((LR_WARMUP_STEPS * GLOBAL_BATCH_SIZE))
 LR_DECAY_SAMPLES=$(((TOTAL_STEPS - LR_WARMUP_STEPS) * GLOBAL_BATCH_SIZE))
 
 # Data cache path (useful for both mock and real data)
-DATA_CACHE_PATH="${PWD}/benchmark_cache_llama3_8b_fp8"
+DATA_CACHE_PATH="${HOME}/benchmark_cache_llama3_8b_fp8"
 mkdir -p "$DATA_CACHE_PATH"
 
 DISTRIBUTED_ARGS=(
