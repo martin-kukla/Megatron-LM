@@ -167,6 +167,14 @@ def fmt_sci(x):
     return f"{x:.1e}".replace("+0", "").replace("+", "").replace(".0e", "e")
 
 
+def fmt_params_int(n):
+    """Human-readable count without decimals: 708.9M → 708M, 5.3B → 5B."""
+    if n >= 1e9:   return f"{int(n / 1e9)}B"
+    if n >= 1e6:   return f"{int(n / 1e6)}M"
+    if n >= 1e3:   return f"{int(n / 1e3)}K"
+    return str(int(n))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Core: compute and print table for one (C, D) point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -268,8 +276,9 @@ def compute_and_print_table(C, D, gbs, args):
     # Build command
     s_str = fmt_sci(S)
     c_str = fmt_sci(C)
-    d_str = format_params(D).replace(" ", "")   # e.g. "5.00B" → "5B"
-    n_str = format_params(best_N).replace(" ", "")  # e.g. "400.0M" → "400M"
+    # Integer-only human-readable suffixes for directory names (e.g. 708M not 708.9M)
+    d_str = fmt_params_int(D)
+    n_str = fmt_params_int(best_N)
 
     run_tag  = f"C{c_str}_D{d_str}_N{n_str}"
     arch_tag = f"h{hidden_size}_l{num_layers}_s{s_str}"
