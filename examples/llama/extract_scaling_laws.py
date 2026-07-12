@@ -202,6 +202,9 @@ def make_plot(data_by_C: dict, output_path: str):
 
     legend_entries = []
 
+    # Collect compute-optimal points for Figure 3
+    optimal_points = []  # list of (C, D_opt, L_opt)
+
     for idx, C in enumerate(sorted_C):
         runs = data_by_C[C]
         tokens = np.array([r["tokens"] for r in runs])
@@ -235,6 +238,7 @@ def make_plot(data_by_C: dict, output_path: str):
                 color="#E91E63",  # Pink/magenta diamond like in the paper
                 marker="D", s=80, zorder=10, edgecolors="white", linewidth=0.5,
             )
+            optimal_points.append((C, D_opt, L_opt))
         else:
             # Fallback: just connect with lines
             ax.plot(tokens, losses, color=color, linewidth=2, alpha=0.8)
@@ -269,7 +273,73 @@ def make_plot(data_by_C: dict, output_path: str):
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
-    print(f"\n✅ Plot saved to: {output_path}")
+    print(f"\n✅ IsoFLOP plot saved to: {output_path}")
+    plt.close(fig)
+
+    return optimal_points
+
+
+def make_optimal_tokens_plot(optimal_points: list, output_path: str):
+    """
+    Produce Figure 3 from the Llama-3 paper:
+    Compute (FLOPs) vs Optimal Training Tokens.
+
+    Fits a power law:  D*(C) = A · C^α
+    in log-log space (linear regression on log₁₀(D) vs log₁₀(C)).
+    """
+    if len(optimal_points) < 2:
+        print("\n⚠️  Need at least 2 compute-optimal points for Figure 3. Skipping.")
+        return
+
+    C_arr = np.array([p[0] for p in optimal_points])
+    D_arr = np.array([p[1] for p in optimal_points])
+
+    # Sort by compute
+    order = np.argsort(C_arr)
+    C_arr = C_arr[order]
+    D_arr = D_arr[order]
+
+    # Fit power law in log-log space:  log₁₀(D*) = α · log₁₀(C) + log₁₀(A)
+    log_C = np.log10(C_arr)
+    log_D = np.log10(D_arr)
+    coeffs = np.polyfit(log_C, log_D, 1)  # [α, log₁₀(A)]
+    alpha = coeffs[0]
+    A = 10 ** coeffs[1]
+
+    print(f"\n📐 Power law fit:  D*(C) = {A:.3f} · C^{alpha:.3f}")
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Data points (pink diamonds matching the IsoFLOP plot)
+    ax.scatter(
+        C_arr, D_arr,
+        color="#E91E63", marker="D", s=80, zorder=10,
+        edgecolors="white", linewidth=0.5,
+    )
+
+    # Fitted line
+    C_dense = np.geomspace(C_arr.min() * 0.5, C_arr.max() * 2, 200)
+    D_fitted = A * np.power(C_dense, alpha)
+    ax.plot(
+        C_dense, D_fitted,
+        color="#1976D2", linewidth=2.5, alpha=0.9,
+        label=rf"Fitted Line, $\alpha = {alpha:.3f}$, $A = {A:.3f}$",
+    )
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Compute (FLOPs)", fontsize=14)
+    ax.set_ylabel("Training Tokens", fontsize=14)
+    ax.tick_params(labelsize=12)
+
+    ax.legend(fontsize=12, loc="upper left", frameon=True, framealpha=0.9, edgecolor="#cccccc")
+    ax.grid(True, which="both", alpha=0.3, linestyle="--")
+    ax.set_axisbelow(True)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    print(f"✅ Optimal tokens plot saved to: {output_path}")
     plt.close(fig)
 
 
@@ -406,7 +476,12 @@ def main():
         return
 
     print(f"\n📈 Plotting {total_points} data points across {len(data_by_C)} compute budgets...")
-    make_plot(data_by_C, args.output)
+    optimal_points = make_plot(data_by_C, args.output)
+
+    # Figure 3: Compute vs Optimal Training Tokens (power law fit)
+    if optimal_points:
+        tokens_output = args.output.replace(".png", "_optimal_tokens.png")
+        make_optimal_tokens_plot(optimal_points, tokens_output)
 
 
 if __name__ == "__main__":
