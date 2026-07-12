@@ -29,12 +29,7 @@ except ImportError:
         "ERROR: tensorboard is not installed. Run:  pip install tensorboard"
     )
 
-try:
-    from scipy.optimize import curve_fit
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
-    print("WARNING: scipy not found — will skip curve fitting. Install with: pip install scipy")
+
 
 
 # ---------------------------------------------------------------------------
@@ -133,40 +128,43 @@ def get_last_validation_loss(event_dir: str) -> tuple[float | None, int | None]:
 
 
 # ---------------------------------------------------------------------------
-#  Curve fitting (Chinchilla-style power law)
+#  Curve fitting (Llama-3 style: parabola in log-token space)
 # ---------------------------------------------------------------------------
 
-def power_law(D, a, b, E):
-    """L(D) = a / D^b + E   (IsoFLOP power law in tokens)."""
-    return a / np.power(D, b) + E
+def fit_isoflop_parabola(tokens_arr, loss_arr):
+    """Fit a second-degree polynomial (parabola) to loss vs log(tokens).
 
+    As described in the Llama-3 paper: "We fit the measured loss values using
+    a second-degree polynomial and identify the minimums of each parabola."
 
-def fit_isoflop_curve(tokens_arr, loss_arr):
-    """Fit a power-law to (tokens, loss) data for a single IsoFLOP slice.
-    Returns (popt, D_opt) where D_opt is the token count that minimises loss.
+    Returns (coeffs, D_opt, L_opt) where:
+      - coeffs: polynomial coefficients [a, b, c] for a*x^2 + b*x + c
+      - D_opt:  token count at the parabola minimum (compute-optimal)
+      - L_opt:  predicted loss at D_opt
+    Returns (None, None, None) if fitting fails.
     """
-    if not HAS_SCIPY or len(tokens_arr) < 3:
-        return None, None
+    if len(tokens_arr) < 3:
+        return None, None, None
     try:
-        popt, _ = curve_fit(
-            power_law,
-            tokens_arr,
-            loss_arr,
-            p0=[1.0, 0.5, 0.5],
-            maxfev=20000,
-            bounds=([0, 0, 0], [np.inf, 2.0, np.inf]),
-        )
-        # Optimal D is where dL/dD = 0 → D_opt is at the minimum of the fitted curve
-        # Since L = a/D^b + E is monotonically decreasing in D, the minimum is at
-        # D→∞.  In practice we want the *valley* on the plot — which means the
-        # minimum among the data points, or we can evaluate over a dense grid.
-        D_dense = np.geomspace(tokens_arr.min() * 0.5, tokens_arr.max() * 2, 500)
-        L_dense = power_law(D_dense, *popt)
-        D_opt = D_dense[np.argmin(L_dense)]
-        return popt, D_opt
+        log_tokens = np.log10(tokens_arr)
+        # Fit: L(log10(D)) = a*(log10(D))^2 + b*(log10(D)) + c
+        coeffs = np.polyfit(log_tokens, loss_arr, 2)
+        a, b, c = coeffs
+
+        # Minimum of parabola: x_min = -b / (2a)  (only valid if a > 0)
+        if a <= 0:
+            # Parabola opens downward — no minimum; fall back to data minimum
+            min_idx = np.argmin(loss_arr)
+            return coeffs, tokens_arr[min_idx], loss_arr[min_idx]
+
+        log_D_opt = -b / (2 * a)
+        D_opt = 10 ** log_D_opt
+        L_opt = np.polyval(coeffs, log_D_opt)
+
+        return coeffs, D_opt, L_opt
     except Exception as e:
-        print(f"  [warn] curve_fit failed: {e}")
-        return None, None
+        print(f"  [warn] parabola fit failed: {e}")
+        return None, None, None
 
 
 # ---------------------------------------------------------------------------
@@ -184,12 +182,13 @@ def format_compute(c: float) -> str:
 
 def make_plot(data_by_C: dict, output_path: str):
     """
-    Produce an IsoFLOP scaling law plot similar to the Llama-3 paper.
-    
-    X-axis: Training Tokens (log scale)
-    Y-axis: Validation Loss
-    Each IsoFLOP line is a different color (light → dark blue gradient).
-    Diamond markers show the optimal (minimum loss) point per IsoFLOP.
+    Produce an IsoFLOP scaling law plot matching the Llama-3 paper (Figure 2).
+
+    - X-axis: Training Tokens (log scale)
+    - Y-axis: Validation Loss
+    - All data points are plotted as same-colored circles per IsoFLOP curve.
+    - A second-degree polynomial (parabola) is fitted in log-token space.
+    - The minimum of each parabola is marked with a pink diamond (compute-optimal).
     """
     fig, ax = plt.subplots(figsize=(10, 7))
 
@@ -207,7 +206,7 @@ def make_plot(data_by_C: dict, output_path: str):
         runs = data_by_C[C]
         tokens = np.array([r["tokens"] for r in runs])
         losses = np.array([r["loss"] for r in runs])
-        
+
         # Sort by tokens
         order = np.argsort(tokens)
         tokens = tokens[order]
@@ -216,33 +215,29 @@ def make_plot(data_by_C: dict, output_path: str):
         color = colors[idx]
         label = format_compute(C)
 
-        # Plot data points
+        # Plot ALL data points as circles
         ax.scatter(tokens, losses, color=color, s=40, zorder=5, alpha=0.9)
 
-        # Fit and plot smooth curve
-        popt, D_opt = fit_isoflop_curve(tokens, losses)
-        if popt is not None:
-            D_dense = np.geomspace(tokens.min() * 0.8, tokens.max() * 1.2, 300)
-            L_dense = power_law(D_dense, *popt)
-            ax.plot(D_dense, L_dense, color=color, linewidth=2, alpha=0.8)
-            
-            # Mark the optimal point (minimum loss) with a diamond
-            min_idx = np.argmin(losses)
+        # Fit parabola in log-token space and plot smooth curve
+        coeffs, D_opt, L_opt = fit_isoflop_parabola(tokens, losses)
+        if coeffs is not None:
+            log_D_dense = np.linspace(
+                np.log10(tokens.min()) - 0.15,
+                np.log10(tokens.max()) + 0.15,
+                300,
+            )
+            L_dense = np.polyval(coeffs, log_D_dense)
+            ax.plot(10**log_D_dense, L_dense, color=color, linewidth=2, alpha=0.8)
+
+            # Mark the parabola minimum (compute-optimal point) with a diamond
             ax.scatter(
-                [tokens[min_idx]], [losses[min_idx]],
+                [D_opt], [L_opt],
                 color="#E91E63",  # Pink/magenta diamond like in the paper
                 marker="D", s=80, zorder=10, edgecolors="white", linewidth=0.5,
             )
         else:
-            # Just connect with lines if curve fitting failed
+            # Fallback: just connect with lines
             ax.plot(tokens, losses, color=color, linewidth=2, alpha=0.8)
-            # Still mark minimum
-            min_idx = np.argmin(losses)
-            ax.scatter(
-                [tokens[min_idx]], [losses[min_idx]],
-                color="#E91E63",
-                marker="D", s=80, zorder=10, edgecolors="white", linewidth=0.5,
-            )
 
         legend_entries.append((color, label))
 
