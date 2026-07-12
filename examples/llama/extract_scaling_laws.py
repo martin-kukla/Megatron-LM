@@ -353,11 +353,12 @@ def main():
         expected = run["expected_steps"]
 
         # Check if the run is complete: last validation step must be
-        # within one eval interval of the expected total steps.
+        # at least 95% of expected total steps (we use a percentage because
+        # the directory name rounds the step count, e.g. s1.8e4 for 17619).
         is_complete = (
             loss is not None
             and step is not None
-            and step >= expected - EVAL_INTERVAL
+            and step >= expected * 0.95
         )
 
         if loss is not None and not is_complete:
