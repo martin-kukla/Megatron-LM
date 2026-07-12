@@ -67,6 +67,7 @@ def parse_dir_name(dirname: str) -> dict | None:
         "hidden": int(m.group("h")),
         "layers": int(m.group("l")),
         "steps_str": m.group("s"),
+        "expected_steps": int(float(m.group("s"))),  # e.g. '4.3e3' → 4300
         "dirname": dirname,
     }
 
@@ -197,7 +198,7 @@ def make_plot(data_by_C: dict, output_path: str):
     n = len(sorted_C)
 
     # Blue gradient from light (low C) to dark (high C) — matching the Llama3 paper
-    cmap = plt.cm.get_cmap("Blues")  # type: ignore
+    cmap = matplotlib.colormaps["Blues"]
     colors = [cmap(0.25 + 0.65 * i / max(n - 1, 1)) for i in range(n)]
 
     legend_entries = []
@@ -338,37 +339,63 @@ def main():
         return
 
     # Extract validation losses
+    EVAL_INTERVAL = 100  # from --eval-interval in training script
     data_by_C = defaultdict(list)
-    print(f"{'Directory':<65s} {'C':>10s} {'Tokens':>12s} {'Params':>10s} {'Val Loss':>10s} {'Step':>8s}")
-    print("-" * 120)
+    print(f"{'Directory':<65s} {'C':>10s} {'Tokens':>12s} {'Params':>10s} {'Val Loss':>10s} {'Step':>8s} {'Expected':>8s} {'Status':>12s}")
+    print("-" * 140)
 
-    csv_lines = ["directory,compute_C,tokens_D,params_N,hidden,layers,val_loss,step"]
+    csv_lines = ["directory,compute_C,tokens_D,params_N,hidden,layers,val_loss,step,expected_steps,complete"]
+    incomplete_count = 0
 
     for run in runs:
         loss, step = get_last_validation_loss(run["path"])
         tokens = tokens_from_dir(run)
-        status = f"{loss:.6f}" if loss is not None else "N/A"
+        expected = run["expected_steps"]
+
+        # Check if the run is complete: last validation step must be
+        # within one eval interval of the expected total steps.
+        is_complete = (
+            loss is not None
+            and step is not None
+            and step >= expected - EVAL_INTERVAL
+        )
+
+        if loss is not None and not is_complete:
+            status_label = "INCOMPLETE"
+            incomplete_count += 1
+        elif loss is not None:
+            status_label = "OK"
+        else:
+            status_label = "NO DATA"
+
+        loss_str = f"{loss:.6f}" if loss is not None else "N/A"
         step_str = str(step) if step is not None else "N/A"
 
         print(
             f"{run['dirname']:<65s} {format_compute(run['C']):>10s} "
-            f"{tokens:>12.2e} {run['N']:>10.0f} {status:>10s} {step_str:>8s}"
+            f"{tokens:>12.2e} {run['N']:>10.0f} {loss_str:>10s} {step_str:>8s} "
+            f"{expected:>8d} {status_label:>12s}"
         )
 
         csv_lines.append(
             f"{run['dirname']},{run['C']:.2e},{tokens:.2e},{run['N']:.0f},"
             f"{run['hidden']},{run['layers']},"
             f"{loss if loss is not None else ''},"
-            f"{step if step is not None else ''}"
+            f"{step if step is not None else ''},"
+            f"{expected},{is_complete}"
         )
 
-        if loss is not None:
+        # Only include completed runs in the plot
+        if is_complete:
             data_by_C[run["C"]].append({
                 "tokens": tokens,
                 "loss": loss,
                 "N": run["N"],
                 "dirname": run["dirname"],
             })
+
+    if incomplete_count > 0:
+        print(f"\n⚠️  {incomplete_count} run(s) marked INCOMPLETE (last step far from expected total).")
 
     # Save CSV
     with open(args.csv, "w") as f:
