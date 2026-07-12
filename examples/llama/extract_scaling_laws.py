@@ -85,46 +85,61 @@ VALIDATION_TAG_CANDIDATES = [
 ]
 
 
-def get_last_validation_loss(event_dir: str) -> tuple[float | None, int | None]:
+def get_last_validation_loss(event_dir: str) -> tuple[float | None, int | None, float | None]:
     """
     Read TensorBoard events from *event_dir* and return
-    (last_val_loss, step_at_last_val_loss).
+    (last_val_loss, step_at_last_val_loss, duration_hours).
 
-    Returns (None, None) if nothing is found.
+    duration_hours is the wall clock time from the first to last logged event
+    across all scalar tags (not just validation).
+
+    Returns (None, None, None) if nothing is found.
     """
-    # EventAccumulator can take a long time on huge dirs; size_guidance limits
-    # in-memory scalars to the most recent 0 (= all).
     ea = EventAccumulator(event_dir, size_guidance={"scalars": 0})
     ea.Reload()
 
     available_tags = ea.Tags().get("scalars", [])
 
+    # --- Compute wall clock duration from the most-logged tag ---
+    duration_hours = None
+    best_tag = None
+    best_count = 0
+    for tag in available_tags:
+        events = ea.Scalars(tag)
+        if len(events) > best_count:
+            best_count = len(events)
+            best_tag = tag
+    if best_tag and best_count >= 2:
+        events = ea.Scalars(best_tag)
+        duration_sec = events[-1].wall_time - events[0].wall_time
+        duration_hours = duration_sec / 3600.0
+
+    # --- Find validation loss ---
     for tag in VALIDATION_TAG_CANDIDATES:
         if tag in available_tags:
             events = ea.Scalars(tag)
             if events:
                 last = events[-1]
-                return last.value, last.step
-    
-    # If none of the candidate tags matched, try a fuzzy match
+                return last.value, last.step, duration_hours
+
+    # Fuzzy match
     for tag in available_tags:
         if "validation" in tag.lower() and "loss" in tag.lower():
             events = ea.Scalars(tag)
             if events:
                 last = events[-1]
                 print(f"  [info] matched fallback tag: '{tag}' → loss={last.value:.4f} @ step {last.step}")
-                return last.value, last.step
+                return last.value, last.step, duration_hours
 
-    # If still nothing, try any tag with 'validation' in it
     for tag in available_tags:
         if "validation" in tag.lower():
             events = ea.Scalars(tag)
             if events:
                 last = events[-1]
                 print(f"  [info] matched loose tag: '{tag}' → loss={last.value:.4f} @ step {last.step}")
-                return last.value, last.step
+                return last.value, last.step, duration_hours
 
-    return None, None
+    return None, None, duration_hours
 
 
 # ---------------------------------------------------------------------------
@@ -404,16 +419,15 @@ def main():
         return
 
     # Extract validation losses
-    EVAL_INTERVAL = 100  # from --eval-interval in training script
     data_by_C = defaultdict(list)
-    print(f"{'Directory':<65s} {'C':>10s} {'Tokens':>12s} {'Params':>10s} {'Val Loss':>10s} {'Step':>8s} {'Expected':>8s} {'Status':>12s}")
-    print("-" * 140)
+    print(f"{'Directory':<65s} {'C':>10s} {'Tokens':>12s} {'Params':>10s} {'Val Loss':>10s} {'Step':>8s} {'Expected':>8s} {'Duration':>10s} {'Status':>12s}")
+    print("-" * 155)
 
-    csv_lines = ["directory,compute_C,tokens_D,params_N,hidden,layers,val_loss,step,expected_steps,complete"]
+    csv_lines = ["directory,compute_C,tokens_D,params_N,hidden,layers,val_loss,step,expected_steps,duration_hours,complete"]
     incomplete_count = 0
 
     for run in runs:
-        loss, step = get_last_validation_loss(run["path"])
+        loss, step, duration_hours = get_last_validation_loss(run["path"])
         tokens = tokens_from_dir(run)
         expected = run["expected_steps"]
 
@@ -436,11 +450,18 @@ def main():
 
         loss_str = f"{loss:.6f}" if loss is not None else "N/A"
         step_str = str(step) if step is not None else "N/A"
+        if duration_hours is not None:
+            if duration_hours < 1:
+                dur_str = f"{duration_hours * 60:.0f}m"
+            else:
+                dur_str = f"{duration_hours:.1f}h"
+        else:
+            dur_str = "N/A"
 
         print(
             f"{run['dirname']:<65s} {format_compute(run['C']):>10s} "
             f"{tokens:>12.2e} {run['N']:>10.0f} {loss_str:>10s} {step_str:>8s} "
-            f"{expected:>8d} {status_label:>12s}"
+            f"{expected:>8d} {dur_str:>10s} {status_label:>12s}"
         )
 
         csv_lines.append(
@@ -448,7 +469,8 @@ def main():
             f"{run['hidden']},{run['layers']},"
             f"{loss if loss is not None else ''},"
             f"{step if step is not None else ''},"
-            f"{expected},{is_complete}"
+            f"{expected},{duration_hours if duration_hours is not None else ''},"
+            f"{is_complete}"
         )
 
         # Only include completed runs in the plot
@@ -458,6 +480,7 @@ def main():
                 "loss": loss,
                 "N": run["N"],
                 "dirname": run["dirname"],
+                "duration_hours": duration_hours,
             })
 
     if incomplete_count > 0:
