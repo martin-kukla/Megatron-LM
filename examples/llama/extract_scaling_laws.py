@@ -195,7 +195,7 @@ def format_compute(c: float) -> str:
     return f"{mantissa}e{exp}"
 
 
-def make_plot(data_by_C: dict, output_path: str):
+def make_plot(data_by_C: dict, output_path: str, incomplete_C_budgets: set | None = None):
     """
     Produce an IsoFLOP scaling law plot matching the Llama-3 paper (Figure 2).
 
@@ -253,7 +253,11 @@ def make_plot(data_by_C: dict, output_path: str):
                 color="#E91E63",  # Pink/magenta diamond like in the paper
                 marker="D", s=80, zorder=10, edgecolors="white", linewidth=0.5,
             )
-            optimal_points.append((C, D_opt, L_opt))
+            # Only include in Figure 3 power law fit if ALL runs for this C are complete
+            if incomplete_C_budgets is None or C not in incomplete_C_budgets:
+                optimal_points.append((C, D_opt, L_opt))
+            else:
+                print(f"  [info] C={format_compute(C)}: optimal point excluded from power law fit (incomplete sweep)")
         else:
             # Fallback: just connect with lines
             ax.plot(tokens, losses, color=color, linewidth=2, alpha=0.8)
@@ -425,6 +429,7 @@ def main():
 
     csv_lines = ["directory,compute_C,tokens_D,params_N,hidden,layers,val_loss,step,expected_steps,duration_hours,complete"]
     incomplete_count = 0
+    incomplete_C_budgets = set()  # C values with any incomplete or missing runs
 
     for run in runs:
         loss, step, duration_hours = get_last_validation_loss(run["path"])
@@ -443,6 +448,7 @@ def main():
         if loss is not None and not is_complete:
             status_label = "INCOMPLETE"
             incomplete_count += 1
+            incomplete_C_budgets.add(run["C"])
         elif loss is not None:
             status_label = "OK"
         else:
@@ -498,8 +504,12 @@ def main():
         print("   Try --list-tags to see what TensorBoard tags are available.")
         return
 
+    if incomplete_C_budgets:
+        print(f"\n⚠️  Compute budgets with incomplete sweeps (excluded from power law fit): "
+              f"{", ".join(format_compute(c) for c in sorted(incomplete_C_budgets))}")
+
     print(f"\n📈 Plotting {total_points} data points across {len(data_by_C)} compute budgets...")
-    optimal_points = make_plot(data_by_C, args.output)
+    optimal_points = make_plot(data_by_C, args.output, incomplete_C_budgets)
 
     # Figure 3: Compute vs Optimal Training Tokens (power law fit)
     if optimal_points:
