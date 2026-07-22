@@ -419,6 +419,12 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
               label=rf"Llama-3 paper, $\alpha={PAPER_ALPHA:.3f}$, $A={PAPER_A:.3f}$")
     _style(ax_D, "Compute (FLOPs)", "Optimal Training Tokens  D*(C)",
            "Compute-optimal token count")
+    # Human-readable y-axis labels for token counts
+    _tok_ticks  = [1e8,    1e9,  1e10,  1e11,   1e12, 1e13,  1e14]
+    _tok_labels = ["100M", "1B", "10B", "100B", "1T", "10T", "100T"]
+    ax_D.set_yticks(_tok_ticks)
+    ax_D.set_yticklabels(_tok_labels, fontsize=11)
+    ax_D.yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
 
     # ── Middle panel: N*(C) = C / (6·D*) ──────────────────────────────────
     ax_N.scatter(C_arr, N_arr, **DIAMOND_KW)
@@ -428,6 +434,12 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
               label=rf"Llama-3 paper, $\alpha={PAPER_ALPHA:.3f}$, $A={PAPER_A:.3f}$")
     _style(ax_N, "Compute (FLOPs)", "Optimal Model Parameters  N*(C)",
            "Compute-optimal parameter count")
+    # Human-readable y-axis labels for parameter counts
+    _param_ticks  = [1e7,   1e8,    1e9,  1e10,  1e11,   1e12]
+    _param_labels = ["10M", "100M", "1B", "10B", "100B",  "1T"]
+    ax_N.set_yticks(_param_ticks)
+    ax_N.set_yticklabels(_param_labels, fontsize=11)
+    ax_N.yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
 
     # ── Right panel: D*/N* ratio (tokens per parameter) ───────────────────
     # Chinchilla (Hoffmann et al. 2022) recommends ≈20 tokens per parameter.
