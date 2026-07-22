@@ -366,18 +366,18 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
     alpha = coeffs[0]
     A = 10 ** coeffs[1]
 
-    print(f"\n📐 Power law fit (D*):  D*(C) = {A:.4f} \u00b7 C^{alpha:.3f}")
+    print(f"\n[fit D*]  D*(C) = {A:.4f} * C^{alpha:.3f}")
 
     # Independent N*(C) fit — Chinchilla Approach 1 style
     # Fit N* directly from the parabola minima, NOT derived from D*.
     log_N = np.log10(N_arr)
-    coeffs_N = np.polyfit(log_C, log_N, 1)  # [\u03b1_N, log\u2081\u2080(G_N)]
+    coeffs_N = np.polyfit(log_C, log_N, 1)  # [alpha_N, log10(G_N)]
     alpha_N = coeffs_N[0]
     G_N = 10 ** coeffs_N[1]
-    print(f"\ud83d\udcd0 Independent fit (N*): N*(C) = {G_N:.4f} \u00b7 C^{alpha_N:.3f}")
-    print(f"   \u03b1_D = {alpha:.3f},  \u03b1_N = {alpha_N:.3f},  \u0394\u03b1 = {alpha - alpha_N:+.4f}")
-    print(f"   Ratio slope (derived  2\u03b1_D\u22121):  {2*alpha - 1:+.4f}")
-    print(f"   Ratio slope (Chinchilla \u03b1_D\u2212\u03b1_N): {alpha - alpha_N:+.4f}")
+    print(f"[fit N*]  N*(C) = {G_N:.4f} * C^{alpha_N:.3f}  (independent Chinchilla-style fit)")
+    print(f"   alpha_D = {alpha:.3f},  alpha_N = {alpha_N:.3f},  delta_alpha = {alpha - alpha_N:+.4f}")
+    print(f"   Ratio slope (derived  2*alpha_D-1):      {2*alpha - 1:+.4f}")
+    print(f"   Ratio slope (Chinchilla alpha_D-alpha_N): {alpha - alpha_N:+.4f}")
 
     # Compute range for smooth curves — extend to the Llama-3 405B budget
     PLOT_C_MAX = 3.8e25   # Llama-3 paper's extrapolation target
