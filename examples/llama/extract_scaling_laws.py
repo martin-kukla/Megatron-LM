@@ -335,15 +335,18 @@ def make_plot(data_by_C: dict, output_path: str, incomplete_C_budgets: set | Non
 
 def make_optimal_tokens_plot(optimal_points: list, output_path: str):
     """
-    Produce Figure 3 from the Llama-3 paper:
-    Compute (FLOPs) vs Optimal Training Tokens.
+    Produce a two-panel figure:
+      Left  — D*(C): optimal training tokens vs compute  (Figure 3 of Llama-3 paper)
+      Right — N*(C): optimal model params vs compute     (N* = C / (6 · D*))
 
-    Fits a power law:  D*(C) = A · C^α
-    in log-log space (linear regression on log₁₀(D) vs log₁₀(C)).
+    Both panels show:
+      - Your fitted power law   D*(C) = A · C^α  (blue solid)
+      - Llama-3 paper reference D*(C) = 0.29 · C^0.537  (orange dashed)
+      - Compute-optimal data points from parabola minima  (pink diamonds)
     """
     if len(optimal_points) < 2:
         print("\n⚠️  Need at least 2 compute-optimal points for Figure 3. Skipping.")
-        return
+        return None
 
     C_arr = np.array([p[0] for p in optimal_points])
     D_arr = np.array([p[1] for p in optimal_points])
@@ -352,6 +355,9 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
     order = np.argsort(C_arr)
     C_arr = C_arr[order]
     D_arr = D_arr[order]
+
+    # Optimal params from Chinchilla identity: N* = C / (6 · D*)
+    N_arr = C_arr / (6.0 * D_arr)
 
     # Fit power law in log-log space:  log₁₀(D*) = α · log₁₀(C) + log₁₀(A)
     log_C = np.log10(C_arr)
@@ -362,50 +368,85 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
 
     print(f"\n📐 Power law fit:  D*(C) = {A:.3f} · C^{alpha:.3f}")
 
-    # Plot
-    fig, ax = plt.subplots(figsize=(8, 6))
+    # Dense compute range for smooth fitted curves
+    C_dense = np.geomspace(C_arr.min() * 0.5, C_arr.max() * 2, 300)
+    # Slightly wider range for the paper reference so slope difference is visible
+    C_ref   = np.geomspace(C_arr.min() * 0.3, C_arr.max() * 5, 300)
 
-    # Data points (pink diamonds matching the IsoFLOP plot)
-    ax.scatter(
-        C_arr, D_arr,
-        color="#E91E63", marker="D", s=80, zorder=10,
-        edgecolors="white", linewidth=0.5,
-    )
+    # Pre-compute all curve quantities
+    D_fitted  = A      * np.power(C_dense, alpha)
+    N_fitted  = C_dense / (6.0 * D_fitted)
+    D_paper   = PAPER_A * np.power(C_ref,   PAPER_ALPHA)
+    N_paper   = C_ref   / (6.0 * D_paper)
 
-    # Fitted line (this sweep)
-    C_dense = np.geomspace(C_arr.min() * 0.5, C_arr.max() * 2, 200)
-    D_fitted = A * np.power(C_dense, alpha)
-    ax.plot(
-        C_dense, D_fitted,
-        color="#1976D2", linewidth=2.5, alpha=0.9,
-        label=rf"This sweep, $\alpha = {alpha:.3f}$, $A = {A:.3f}$",
-    )
+    # Ratio D*/N* = 6·A²·C^(2α−1)  — measures tokens per parameter
+    R_arr    = D_arr   / N_arr                        # data points
+    R_fitted = D_fitted / N_fitted                    # = 6·A²·C_dense^(2α−1)
+    R_paper  = D_paper  / N_paper                     # = 6·PAPER_A²·C_ref^(2·PAPER_ALPHA−1)
 
-    # Llama-3 paper reference line — drawn over a wider range so the slope
-    # difference is clearly visible even if the lines cross inside the data.
-    C_ref = np.geomspace(C_arr.min() * 0.3, C_arr.max() * 5, 200)
-    D_paper = PAPER_A * np.power(C_ref, PAPER_ALPHA)
-    ax.plot(
-        C_ref, D_paper,
-        color="#FF6F00", linewidth=2.0, linestyle="--", alpha=0.85,
-        label=rf"Llama-3 paper, $\alpha = {PAPER_ALPHA:.3f}$, $A = {PAPER_A:.3f}$",
-    )
+    # --- Figure with three subplots ---
+    fig, (ax_D, ax_N, ax_R) = plt.subplots(1, 3, figsize=(21, 6))
 
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("Compute (FLOPs)", fontsize=14)
-    ax.set_ylabel("Training Tokens", fontsize=14)
-    ax.tick_params(labelsize=12)
+    DIAMOND_KW = dict(color="#E91E63", marker="D", s=80, zorder=10,
+                      edgecolors="white", linewidth=0.5)
+    SWEEP_KW   = dict(color="#1976D2", linewidth=2.5, alpha=0.9)
+    PAPER_KW   = dict(color="#FF6F00", linewidth=2.0, linestyle="--", alpha=0.85)
 
-    ax.legend(fontsize=11, loc="upper left", frameon=True, framealpha=0.9, edgecolor="#cccccc")
-    ax.grid(True, which="both", alpha=0.3, linestyle="--")
-    ax.set_axisbelow(True)
+    def _style(ax, xlabel, ylabel, title):
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel(xlabel, fontsize=13)
+        ax.set_ylabel(ylabel, fontsize=13)
+        ax.set_title(title, fontsize=13, fontweight="bold")
+        ax.tick_params(labelsize=11)
+        ax.legend(fontsize=10, loc="upper left", frameon=True,
+                  framealpha=0.9, edgecolor="#cccccc")
+        ax.grid(True, which="both", alpha=0.3, linestyle="--")
+        ax.set_axisbelow(True)
 
+    # ── Left panel: D*(C) ──────────────────────────────────────────────────
+    ax_D.scatter(C_arr, D_arr, **DIAMOND_KW)
+    ax_D.plot(C_dense, D_fitted, **SWEEP_KW,
+              label=rf"This sweep, $\alpha={alpha:.3f}$, $A={A:.3f}$")
+    ax_D.plot(C_ref, D_paper, **PAPER_KW,
+              label=rf"Llama-3 paper, $\alpha={PAPER_ALPHA:.3f}$, $A={PAPER_A:.3f}$")
+    _style(ax_D, "Compute (FLOPs)", "Optimal Training Tokens  D*(C)",
+           "Compute-optimal token count")
+
+    # ── Middle panel: N*(C) = C / (6·D*) ──────────────────────────────────
+    ax_N.scatter(C_arr, N_arr, **DIAMOND_KW)
+    ax_N.plot(C_dense, N_fitted, **SWEEP_KW,
+              label=rf"This sweep, $\alpha={alpha:.3f}$, $A={A:.3f}$")
+    ax_N.plot(C_ref, N_paper, **PAPER_KW,
+              label=rf"Llama-3 paper, $\alpha={PAPER_ALPHA:.3f}$, $A={PAPER_A:.3f}$")
+    _style(ax_N, "Compute (FLOPs)", "Optimal Model Parameters  N*(C)",
+           "Compute-optimal parameter count")
+
+    # ── Right panel: D*/N* ratio (tokens per parameter) ───────────────────
+    # Chinchilla (Hoffmann et al. 2022) recommends ≈20 tokens per parameter.
+    # D*/N* = 6·A²·C^(2α−1); if α=0.5 this is constant; it drifts otherwise.
+    ax_R.scatter(C_arr, R_arr, **DIAMOND_KW, label="Data points")
+    ax_R.plot(C_dense, R_fitted, **SWEEP_KW,
+              label=rf"This sweep ($\alpha={alpha:.3f}$)")
+    ax_R.plot(C_ref, R_paper, **PAPER_KW,
+              label=rf"Llama-3 paper ($\alpha={PAPER_ALPHA:.3f}$)")
+    # Chinchilla 20× reference
+    ax_R.axhline(20, color="#43A047", linewidth=1.8, linestyle=":",
+                 label="Chinchilla 20× rule")
+    _style(ax_R, "Compute (FLOPs)", "D*(C) / N*(C)  [tokens per param]",
+           "Token-to-parameter ratio")
+    # Force y-axis to show the 20× line clearly
+    all_R = np.concatenate([R_arr, R_fitted, R_paper])
+    ax_R.set_ylim(max(1, all_R.min() * 0.5), all_R.max() * 2)
+
+    fig.suptitle("Compute-optimal allocation  —  D*(C),  N*(C),  and D*/N* ratio",
+                 fontsize=14, fontweight="bold", y=1.01)
     fig.tight_layout()
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
-    print(f"✅ Optimal tokens plot saved to: {output_path}")
+    print(f"✅ Optimal allocation plot (3 panels) saved to: {output_path}")
     plt.close(fig)
     return alpha, A
+
 
 
 # ---------------------------------------------------------------------------
