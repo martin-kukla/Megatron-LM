@@ -70,19 +70,68 @@ def parse_si(value_str: str, unit: str) -> float:
     return val * multiplier
 
 
+def exact_params(hidden_size: int, num_layers: int, vocab_size: int = 128256) -> int:
+    """Compute exact non-embedding parameter count for the Llama3 scaling law architecture.
+
+    Derived from train_llama3_scaling_laws_b200_fp8.sh:
+      - HEAD_DIM = 128
+      - NUM_HEADS = hidden_size // 128
+      - GQA_RATIO = 4  ->  num_kv_heads = max(1, num_heads // 4)
+      - FFN_HIDDEN = hidden_size * 7 // 2   (3.5x, integer division)
+      - SwiGLU FFN: gate + up + down (3 weight matrices, no bias)
+      - RMSNorm: weight-only (2 per layer + 1 final)
+      - No bias in linear layers  (--disable-bias-linear)
+      - Untied input/output embeddings  (--untie-embeddings-and-output-weights)
+
+    Returns non-embedding parameters (standard scaling law convention:
+    embedding + LM-head weights are excluded).
+    """
+    head_dim    = 128
+    num_heads   = hidden_size // head_dim
+    num_kv_heads = max(1, num_heads // 4)
+    kv_proj_dim  = num_kv_heads * head_dim          # = num_kv_heads * 128
+    ffn_hidden   = hidden_size * 7 // 2              # integer div matches bash $((H*7/2))
+
+    # Attention block: Q, K, V, O projections (no bias)
+    attn = (
+        hidden_size * hidden_size    # Q: H -> H
+        + hidden_size * kv_proj_dim  # K: H -> kv_dim
+        + hidden_size * kv_proj_dim  # V: H -> kv_dim
+        + hidden_size * hidden_size  # O: H -> H
+    )
+    # SwiGLU FFN: gate_proj + up_proj + down_proj (no bias)
+    ffn = (
+        hidden_size * ffn_hidden    # gate
+        + hidden_size * ffn_hidden  # up
+        + ffn_hidden  * hidden_size # down
+    )
+    # RMSNorm weights: pre-attention + pre-FFN per layer
+    norms_per_layer = 2 * hidden_size
+
+    layer_params = attn + ffn + norms_per_layer
+    final_norm   = hidden_size  # post-last-layer RMSNorm
+
+    return num_layers * layer_params + final_norm
+
+
 def parse_dir_name(dirname: str) -> dict | None:
     """Parse run metadata from directory name."""
     m = DIR_PATTERN.search(dirname)
     if not m:
         return None
+    hidden = int(m.group("h"))
+    layers = int(m.group("l"))
     return {
         "C": float(m.group("C")),         # Compute budget in FLOPs
         "D_B": int(m.group("D")),          # Data tokens in billions (raw int from name)
-        "N": parse_si(m.group("N"), m.group("N_unit")),  # Model params
-        "hidden": int(m.group("h")),
-        "layers": int(m.group("l")),
+        # Exact non-embedding parameter count from architecture formula:
+        "N": exact_params(hidden, layers),
+        # Approximate N from directory label (kept for reference / debug):
+        "N_approx": parse_si(m.group("N"), m.group("N_unit")),
+        "hidden": hidden,
+        "layers": layers,
         "steps_str": m.group("s"),
-        "expected_steps": int(float(m.group("s"))),  # e.g. '4.3e3' → 4300
+        "expected_steps": int(float(m.group("s"))),  # e.g. '4.3e3' -> 4300
         "dirname": dirname,
     }
 
@@ -505,9 +554,14 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
                  label="Chinchilla 20\u00d7 rule")
     _style(ax_R, "Compute (FLOPs)", "D*(C) / N*(C)  [tokens per param]",
            "Token-to-parameter ratio")
-    # Force y-axis to show the 20\u00d7 line clearly
+    # Switch to linear y-axis so the Chinchilla 20x line reads naturally
+    ax_R.set_yscale("linear")
     all_R = np.concatenate([R_arr, R_fitted, R_indep, R_paper])
-    ax_R.set_ylim(max(1, all_R.min() * 0.5), all_R.max() * 2)
+    y_lo = max(0, all_R.min() * 0.5)
+    y_hi = max(50, all_R.max() * 1.3)  # always show at least 0..50
+    ax_R.set_ylim(y_lo, y_hi)
+    ax_R.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(10))
+    ax_R.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(5))
 
     fig.suptitle("Compute-optimal allocation  —  D*(C),  N*(C),  and D*/N* ratio",
                  fontsize=14, fontweight="bold", y=1.01)
