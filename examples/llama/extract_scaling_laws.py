@@ -368,10 +368,11 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
 
     print(f"\n📐 Power law fit:  D*(C) = {A:.3f} · C^{alpha:.3f}")
 
-    # Dense compute range for smooth fitted curves
-    C_dense = np.geomspace(C_arr.min() * 0.5, C_arr.max() * 2, 300)
-    # Slightly wider range for the paper reference so slope difference is visible
-    C_ref   = np.geomspace(C_arr.min() * 0.3, C_arr.max() * 5, 300)
+    # Compute range for smooth curves — extend to the Llama-3 405B budget
+    PLOT_C_MAX = 3.8e25   # Llama-3 paper's extrapolation target
+    PLOT_C_MIN = C_arr.min() * 0.3
+    C_dense = np.geomspace(PLOT_C_MIN, PLOT_C_MAX, 500)
+    C_ref   = C_dense  # same range for both fits
 
     # Pre-compute all curve quantities
     D_fitted  = A      * np.power(C_dense, alpha)
@@ -395,10 +396,16 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
     def _style(ax, xlabel, ylabel, title):
         ax.set_xscale("log")
         ax.set_yscale("log")
+        ax.set_xlim(PLOT_C_MIN, PLOT_C_MAX * 1.5)
         ax.set_xlabel(xlabel, fontsize=13)
         ax.set_ylabel(ylabel, fontsize=13)
         ax.set_title(title, fontsize=13, fontweight="bold")
         ax.tick_params(labelsize=11)
+        # Vertical reference at Llama-3 405B compute
+        ax.axvline(PLOT_C_MAX, color="#9E9E9E", linewidth=1.2, linestyle=":", zorder=1)
+        ax.text(PLOT_C_MAX * 1.08, 0.02, "Llama-3 405B\n3.8e25 FLOPs",
+                fontsize=8, color="#616161", va="bottom", ha="left", rotation=90,
+                transform=ax.get_xaxis_transform())
         ax.legend(fontsize=10, loc="upper left", frameon=True,
                   framealpha=0.9, edgecolor="#cccccc")
         ax.grid(True, which="both", alpha=0.3, linestyle="--")
