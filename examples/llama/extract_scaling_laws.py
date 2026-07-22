@@ -181,20 +181,24 @@ def get_last_validation_loss(event_dir: str) -> tuple[float | None, int | None, 
 #  Curve fitting (Llama-3 style: parabola in log-token space)
 # ---------------------------------------------------------------------------
 
-def fit_isoflop_parabola(tokens_arr, loss_arr):
-    """Fit a second-degree polynomial (parabola) to loss vs log(tokens).
+def fit_isoflop_parabola(tokens_arr, loss_arr, params_arr=None):
+    """Fit second-degree polynomial(s) to loss vs log(tokens) [and loss vs log(params)].
 
     As described in the Llama-3 paper: "We fit the measured loss values using
     a second-degree polynomial and identify the minimums of each parabola."
 
-    Returns (coeffs, D_opt, L_opt) where:
-      - coeffs: polynomial coefficients [a, b, c] for a*x^2 + b*x + c
-      - D_opt:  token count at the parabola minimum (compute-optimal)
+    If *params_arr* is provided, a second independent parabola is fit in
+    log-param space (Chinchilla Approach 1) to find N_opt directly from data.
+
+    Returns (coeffs, D_opt, L_opt, N_opt) where:
+      - coeffs: polynomial coefficients [a, b, c] for loss vs log10(tokens)
+      - D_opt:  token count at the tokens-parabola minimum
       - L_opt:  predicted loss at D_opt
-    Returns (None, None, None) if fitting fails.
+      - N_opt:  param count at the params-parabola minimum (None if params_arr not given)
+    Returns (None, None, None, None) if fitting fails.
     """
     if len(tokens_arr) < 3:
-        return None, None, None
+        return None, None, None, None
     try:
         log_tokens = np.log10(tokens_arr)
         # Fit: L(log10(D)) = a*(log10(D))^2 + b*(log10(D)) + c
@@ -205,16 +209,32 @@ def fit_isoflop_parabola(tokens_arr, loss_arr):
         if a <= 0:
             # Parabola opens downward — no minimum; fall back to data minimum
             min_idx = np.argmin(loss_arr)
-            return coeffs, tokens_arr[min_idx], loss_arr[min_idx]
+            D_opt, L_opt = tokens_arr[min_idx], loss_arr[min_idx]
+        else:
+            log_D_opt = -b / (2 * a)
+            D_opt = 10 ** log_D_opt
+            L_opt = np.polyval(coeffs, log_D_opt)
 
-        log_D_opt = -b / (2 * a)
-        D_opt = 10 ** log_D_opt
-        L_opt = np.polyval(coeffs, log_D_opt)
+        # Independent parabola fit in log-param space (Chinchilla Approach 1)
+        N_opt = None
+        if params_arr is not None and len(params_arr) >= 3:
+            try:
+                log_params = np.log10(params_arr)
+                coeffs_N = np.polyfit(log_params, loss_arr, 2)
+                aN, bN, _ = coeffs_N
+                if aN > 0:
+                    log_N_opt = -bN / (2 * aN)
+                    N_opt = 10 ** log_N_opt
+                else:
+                    # Parabola opens downward — fall back to data minimum
+                    N_opt = params_arr[np.argmin(loss_arr)]
+            except Exception:
+                pass  # N_opt stays None
 
-        return coeffs, D_opt, L_opt
+        return coeffs, D_opt, L_opt, N_opt
     except Exception as e:
         print(f"  [warn] parabola fit failed: {e}")
-        return None, None, None
+        return None, None, None, None
 
 
 # ---------------------------------------------------------------------------
@@ -258,12 +278,14 @@ def make_plot(data_by_C: dict, output_path: str, incomplete_C_budgets: set | Non
     for idx, C in enumerate(sorted_C):
         runs = data_by_C[C]
         tokens = np.array([r["tokens"] for r in runs])
-        losses = np.array([r["loss"] for r in runs])
+        losses = np.array([r["loss"]   for r in runs])
+        params = np.array([r["N"]      for r in runs])  # model parameter counts
 
         # Sort by tokens
         order = np.argsort(tokens)
         tokens = tokens[order]
         losses = losses[order]
+        params = params[order]
 
         color = colors[idx]
         label = format_compute(C)
@@ -271,8 +293,8 @@ def make_plot(data_by_C: dict, output_path: str, incomplete_C_budgets: set | Non
         # Plot ALL data points as circles
         ax.scatter(tokens, losses, color=color, s=40, zorder=5, alpha=0.9)
 
-        # Fit parabola in log-token space and plot smooth curve
-        coeffs, D_opt, L_opt = fit_isoflop_parabola(tokens, losses)
+        # Fit parabola in log-token space (D_opt) AND log-param space (N_opt independent)
+        coeffs, D_opt, L_opt, N_opt = fit_isoflop_parabola(tokens, losses, params_arr=params)
         if coeffs is not None:
             log_D_dense = np.linspace(
                 np.log10(tokens.min()) - 0.15,
@@ -290,7 +312,7 @@ def make_plot(data_by_C: dict, output_path: str, incomplete_C_budgets: set | Non
             )
             # Only include in Figure 3 power law fit if ALL runs for this C are complete
             if incomplete_C_budgets is None or C not in incomplete_C_budgets:
-                optimal_points.append((C, D_opt, L_opt))
+                optimal_points.append((C, D_opt, L_opt, N_opt))  # N_opt may be None
             else:
                 print(f"  [info] C={format_compute(C)}: optimal point excluded from power law fit (incomplete sweep)")
         else:
@@ -356,8 +378,19 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
     C_arr = C_arr[order]
     D_arr = D_arr[order]
 
-    # Optimal params from Chinchilla identity: N* = C / (6 · D*)
-    N_arr = C_arr / (6.0 * D_arr)
+    # N* from Chinchilla identity (derived, always = 1-alpha_D slope)
+    N_arr_derived = C_arr / (6.0 * D_arr)
+
+    # N* from independent parabola fit in log-param space (truly independent)
+    N_opt_raw = [p[3] for p in optimal_points]  # may contain None
+    N_opt_sorted = [N_opt_raw[i] for i in np.argsort([p[0] for p in optimal_points])]
+    has_indep_N = all(n is not None for n in N_opt_sorted)
+    if has_indep_N:
+        N_arr = np.array(N_opt_sorted, dtype=float)
+        print("[N* fit] Using independently fitted N_opt from log-param parabola (Chinchilla Approach 1)")
+    else:
+        N_arr = N_arr_derived
+        print("[N* fit] WARNING: some N_opt missing; falling back to derived N* = C/(6*D*)")
 
     # Fit power law in log-log space:  log₁₀(D*) = α · log₁₀(C) + log₁₀(A)
     log_C = np.log10(C_arr)
