@@ -43,6 +43,26 @@ DIR_PATTERN = re.compile(
 )
 
 
+# ---------------------------------------------------------------------------
+#  Sequence length (constant across all runs) and per-compute GBS lookup
+# ---------------------------------------------------------------------------
+
+# Llama-3 sequence length used in every training run.
+SEQ_LEN = 8192
+
+# Global Batch Size is fixed per compute budget (IsoFLOP sweep).
+# Maps the C value parsed from the directory name → GBS (sequences per step).
+GBS_BY_COMPUTE: dict[float, int] = {
+    6e18:  32,
+    1e19:  40,
+    3e19:  56,
+    6e19:  72,
+    1e20:  96,
+    3e20: 136,
+    6e20: 192,
+}
+
+
 def parse_si(value_str: str, unit: str) -> float:
     """Convert e.g. '460' + 'M' -> 460e6."""
     val = float(value_str)
@@ -68,8 +88,20 @@ def parse_dir_name(dirname: str) -> dict | None:
 
 
 def tokens_from_dir(meta: dict) -> float:
-    """Approximate tokens from the directory name D field (in billions)."""
-    return meta["D_B"] * 1e9
+    """Compute precise token count as GBS * expected_steps * SEQ_LEN.
+
+    GBS (Global Batch Size) is fixed per compute budget and looked up from
+    GBS_BY_COMPUTE.  Falls back to the coarser D_B * 1e9 estimate with a
+    warning when the compute budget is not in the table.
+    """
+    gbs = GBS_BY_COMPUTE.get(meta["C"])
+    if gbs is None:
+        print(
+            f"  [warn] C={meta['C']:.2e} not found in GBS_BY_COMPUTE; "
+            f"falling back to D_B*1e9 estimate for '{meta['dirname']}'"
+        )
+        return meta["D_B"] * 1e9
+    return gbs * meta["expected_steps"] * SEQ_LEN
 
 
 # ---------------------------------------------------------------------------
