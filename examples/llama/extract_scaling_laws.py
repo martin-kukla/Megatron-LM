@@ -366,7 +366,18 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
     alpha = coeffs[0]
     A = 10 ** coeffs[1]
 
-    print(f"\n📐 Power law fit:  D*(C) = {A:.3f} · C^{alpha:.3f}")
+    print(f"\n📐 Power law fit (D*):  D*(C) = {A:.4f} \u00b7 C^{alpha:.3f}")
+
+    # Independent N*(C) fit — Chinchilla Approach 1 style
+    # Fit N* directly from the parabola minima, NOT derived from D*.
+    log_N = np.log10(N_arr)
+    coeffs_N = np.polyfit(log_C, log_N, 1)  # [\u03b1_N, log\u2081\u2080(G_N)]
+    alpha_N = coeffs_N[0]
+    G_N = 10 ** coeffs_N[1]
+    print(f"\ud83d\udcd0 Independent fit (N*): N*(C) = {G_N:.4f} \u00b7 C^{alpha_N:.3f}")
+    print(f"   \u03b1_D = {alpha:.3f},  \u03b1_N = {alpha_N:.3f},  \u0394\u03b1 = {alpha - alpha_N:+.4f}")
+    print(f"   Ratio slope (derived  2\u03b1_D\u22121):  {2*alpha - 1:+.4f}")
+    print(f"   Ratio slope (Chinchilla \u03b1_D\u2212\u03b1_N): {alpha - alpha_N:+.4f}")
 
     # Compute range for smooth curves — extend to the Llama-3 405B budget
     PLOT_C_MAX = 3.8e25   # Llama-3 paper's extrapolation target
@@ -376,14 +387,16 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
 
     # Pre-compute all curve quantities
     D_fitted  = A      * np.power(C_dense, alpha)
-    N_fitted  = C_dense / (6.0 * D_fitted)
+    N_fitted  = C_dense / (6.0 * D_fitted)          # derived from D* (Llama-3 style)
+    N_indep   = G_N    * np.power(C_dense, alpha_N)  # independently fitted (Chinchilla style)
     D_paper   = PAPER_A * np.power(C_ref,   PAPER_ALPHA)
     N_paper   = C_ref   / (6.0 * D_paper)
 
-    # Ratio D*/N* = 6·A²·C^(2α−1)  — measures tokens per parameter
-    R_arr    = D_arr   / N_arr                        # data points
-    R_fitted = D_fitted / N_fitted                    # = 6·A²·C_dense^(2α−1)
-    R_paper  = D_paper  / N_paper                     # = 6·PAPER_A²·C_ref^(2·PAPER_ALPHA−1)
+    # Ratio D*/N*
+    R_arr    = D_arr   / N_arr       # data points
+    R_fitted = D_fitted / N_fitted   # derived ratio  = 6A\u00b2\u00b7C^(2\u03b1_D\u22121)
+    R_indep  = D_fitted / N_indep    # Chinchilla ratio = (A/G_N)\u00b7C^(\u03b1_D\u2212\u03b1_N)
+    R_paper  = D_paper  / N_paper    # paper derived   = 6\u00b7PAPER_A\u00b2\u00b7C^(2\u00b70.537\u22121)
 
     # --- Figure with three subplots ---
     fig, (ax_D, ax_N, ax_R) = plt.subplots(1, 3, figsize=(21, 6))
@@ -392,6 +405,8 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
                       edgecolors="white", linewidth=0.5)
     SWEEP_KW   = dict(color="#1976D2", linewidth=2.5, alpha=0.9)
     PAPER_KW   = dict(color="#FF6F00", linewidth=2.0, linestyle="--", alpha=0.85)
+    # Independent N* fit line — green dash-dot, distinct from derived blue
+    INDEP_KW   = dict(color="#2E7D32", linewidth=2.0, linestyle="-.", alpha=0.9)
 
     def _style(ax, xlabel, ylabel, title):
         ax.set_xscale("log")
@@ -429,7 +444,9 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
     # ── Middle panel: N*(C) = C / (6·D*) ──────────────────────────────────
     ax_N.scatter(C_arr, N_arr, **DIAMOND_KW)
     ax_N.plot(C_dense, N_fitted, **SWEEP_KW,
-              label=rf"This sweep, $\alpha={alpha:.3f}$, $A={A:.3f}$")
+              label=rf"Sweep D*-derived  ($\alpha_D$={alpha:.3f})")
+    ax_N.plot(C_dense, N_indep, **INDEP_KW,
+              label=rf"Sweep independent fit  ($\alpha_N$={alpha_N:.3f}, $G_N$={G_N:.3f})")
     ax_N.plot(C_ref, N_paper, **PAPER_KW,
               label=rf"Llama-3 paper, $\alpha={PAPER_ALPHA:.3f}$, $A={PAPER_A:.3f}$")
     _style(ax_N, "Compute (FLOPs)", "Optimal Model Parameters  N*(C)",
@@ -442,20 +459,21 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
     ax_N.yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
 
     # ── Right panel: D*/N* ratio (tokens per parameter) ───────────────────
-    # Chinchilla (Hoffmann et al. 2022) recommends ≈20 tokens per parameter.
-    # D*/N* = 6·A²·C^(2α−1); if α=0.5 this is constant; it drifts otherwise.
+    # Chinchilla (Hoffmann et al. 2022) recommends \u224820 tokens per parameter.
     ax_R.scatter(C_arr, R_arr, **DIAMOND_KW, label="Data points")
     ax_R.plot(C_dense, R_fitted, **SWEEP_KW,
-              label=rf"This sweep ($\alpha={alpha:.3f}$)")
-    ax_R.plot(C_ref, R_paper, **PAPER_KW,
-              label=rf"Llama-3 paper ($\alpha={PAPER_ALPHA:.3f}$)")
-    # Chinchilla 20× reference
+              label=rf"Sweep D*-derived ($\alpha_D$={alpha:.3f}, slope={2*alpha-1:+.3f})")
+    ax_R.plot(C_dense, R_indep,  **INDEP_KW,
+              label=rf"Sweep Chinchilla ($\alpha_D - \alpha_N$ = {alpha-alpha_N:+.3f})")
+    ax_R.plot(C_ref,   R_paper,  **PAPER_KW,
+              label=rf"Llama-3 paper ($\alpha$={PAPER_ALPHA:.3f}, slope={2*PAPER_ALPHA-1:+.3f})")
+    # Chinchilla 20\u00d7 reference
     ax_R.axhline(20, color="#43A047", linewidth=1.8, linestyle=":",
-                 label="Chinchilla 20× rule")
+                 label="Chinchilla 20\u00d7 rule")
     _style(ax_R, "Compute (FLOPs)", "D*(C) / N*(C)  [tokens per param]",
            "Token-to-parameter ratio")
-    # Force y-axis to show the 20× line clearly
-    all_R = np.concatenate([R_arr, R_fitted, R_paper])
+    # Force y-axis to show the 20\u00d7 line clearly
+    all_R = np.concatenate([R_arr, R_fitted, R_indep, R_paper])
     ax_R.set_ylim(max(1, all_R.min() * 0.5), all_R.max() * 2)
 
     fig.suptitle("Compute-optimal allocation  —  D*(C),  N*(C),  and D*/N* ratio",
