@@ -372,13 +372,23 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
         edgecolors="white", linewidth=0.5,
     )
 
-    # Fitted line
+    # Fitted line (this sweep)
     C_dense = np.geomspace(C_arr.min() * 0.5, C_arr.max() * 2, 200)
     D_fitted = A * np.power(C_dense, alpha)
     ax.plot(
         C_dense, D_fitted,
         color="#1976D2", linewidth=2.5, alpha=0.9,
-        label=rf"Fitted Line, $\alpha = {alpha:.3f}$, $A = {A:.3f}$",
+        label=rf"This sweep, $\alpha = {alpha:.3f}$, $A = {A:.3f}$",
+    )
+
+    # Llama-3 paper reference line — drawn over a wider range so the slope
+    # difference is clearly visible even if the lines cross inside the data.
+    C_ref = np.geomspace(C_arr.min() * 0.3, C_arr.max() * 5, 200)
+    D_paper = PAPER_A * np.power(C_ref, PAPER_ALPHA)
+    ax.plot(
+        C_ref, D_paper,
+        color="#FF6F00", linewidth=2.0, linestyle="--", alpha=0.85,
+        label=rf"Llama-3 paper, $\alpha = {PAPER_ALPHA:.3f}$, $A = {PAPER_A:.3f}$",
     )
 
     ax.set_xscale("log")
@@ -387,7 +397,7 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
     ax.set_ylabel("Training Tokens", fontsize=14)
     ax.tick_params(labelsize=12)
 
-    ax.legend(fontsize=12, loc="upper left", frameon=True, framealpha=0.9, edgecolor="#cccccc")
+    ax.legend(fontsize=11, loc="upper left", frameon=True, framealpha=0.9, edgecolor="#cccccc")
     ax.grid(True, which="both", alpha=0.3, linestyle="--")
     ax.set_axisbelow(True)
 
