@@ -87,12 +87,14 @@ def parse_dir_name(dirname: str) -> dict | None:
     }
 
 
-def tokens_from_dir(meta: dict) -> float:
-    """Compute precise token count as GBS * expected_steps * SEQ_LEN.
+def tokens_from_dir(meta: dict, actual_step: int | None = None) -> float:
+    """Compute precise token count as GBS * steps * SEQ_LEN.
 
-    GBS (Global Batch Size) is fixed per compute budget and looked up from
-    GBS_BY_COMPUTE.  Falls back to the coarser D_B * 1e9 estimate with a
-    warning when the compute budget is not in the table.
+    Uses *actual_step* (the last step logged to TensorBoard) when available,
+    because it is exact.  Falls back to *expected_steps* parsed from the
+    directory name (e.g. 's1.1e5' → 110000) which can be off by up to ~3%.
+    Falls further back to the coarser D_B * 1e9 estimate with a warning
+    when the compute budget is not in GBS_BY_COMPUTE.
     """
     gbs = GBS_BY_COMPUTE.get(meta["C"])
     if gbs is None:
@@ -101,7 +103,8 @@ def tokens_from_dir(meta: dict) -> float:
             f"falling back to D_B*1e9 estimate for '{meta['dirname']}'"
         )
         return meta["D_B"] * 1e9
-    return gbs * meta["expected_steps"] * SEQ_LEN
+    steps = actual_step if actual_step is not None else meta["expected_steps"]
+    return gbs * steps * SEQ_LEN
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +468,9 @@ def main():
 
     for run in runs:
         loss, step, duration_hours = get_last_validation_loss(run["path"])
-        tokens = tokens_from_dir(run)
+        # Use the actual TensorBoard step when available (most precise);
+        # tokens_from_dir falls back to expected_steps from the dir name.
+        tokens = tokens_from_dir(run, actual_step=step)
         expected = run["expected_steps"]
 
         # Check if the run is complete: last validation step must be
