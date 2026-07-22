@@ -395,6 +395,74 @@ def make_optimal_tokens_plot(optimal_points: list, output_path: str):
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     print(f"✅ Optimal tokens plot saved to: {output_path}")
     plt.close(fig)
+    return alpha, A
+
+
+# ---------------------------------------------------------------------------
+#  Optimal allocation comparison table
+# ---------------------------------------------------------------------------
+
+# Llama-3 paper power-law coefficients (Figure 3):  D*(C) = A · C^α
+PAPER_ALPHA = 0.537
+PAPER_A     = 0.29  # tokens
+
+
+def _fmt_tokens(n: float) -> str:
+    """Format a token count as e.g. '15.3B' or '1.26T'."""
+    if n >= 1e12:
+        return f"{n/1e12:.2f}T"
+    if n >= 1e9:
+        return f"{n/1e9:.2f}B"
+    return f"{n/1e6:.0f}M"
+
+
+def _fmt_params(n: float) -> str:
+    """Format a parameter count as e.g. '7.3B' or '405M'."""
+    if n >= 1e9:
+        return f"{n/1e9:.2f}B"
+    return f"{n/1e6:.0f}M"
+
+
+def print_optimal_allocation_table(
+    alpha: float,
+    A: float,
+    compute_budgets: list[float],
+) -> None:
+    """
+    Print a side-by-side table of compute-optimal token count D*(C) and
+    parameter count N*(C) predicted by:
+      - the power law fitted from *this* sweep  (D* = A · C^α)
+      - the original Llama-3 paper coefficients (D* = 0.29 · C^0.537)
+
+    N* is derived via the Chinchilla identity:  N* = C / (6 · D*)
+    """
+    print("\n" + "=" * 88)
+    print("  Compute-optimal allocation:  D*(C) = A·C^α,  N*(C) = C / (6·D*)")
+    print(f"  Your fit   : α = {alpha:.3f}, A = {A:.4f}")
+    print(f"  Llama-3 paper: α = {PAPER_ALPHA:.3f}, A = {PAPER_A:.4f}")
+    print("=" * 88)
+    hdr = (
+        f"  {'C (FLOPs)':>12s}  "
+        f"{'Yours D*':>12s}  {'Paper D*':>12s}  "
+        f"{'Yours N*':>10s}  {'Paper N*':>10s}  "
+        f"{'D* ratio':>9s}  {'N* ratio':>9s}"
+    )
+    print(hdr)
+    print("  " + "-" * 84)
+    for C in compute_budgets:
+        D_yours = A * C ** alpha
+        D_paper = PAPER_A * C ** PAPER_ALPHA
+        N_yours = C / (6.0 * D_yours)
+        N_paper = C / (6.0 * D_paper)
+        ratio_D = D_yours / D_paper
+        ratio_N = N_yours / N_paper
+        print(
+            f"  {format_compute(C):>12s}  "
+            f"{_fmt_tokens(D_yours):>12s}  {_fmt_tokens(D_paper):>12s}  "
+            f"{_fmt_params(N_yours):>10s}  {_fmt_params(N_paper):>10s}  "
+            f"{ratio_D:>8.2f}x  {ratio_N:>8.2f}x"
+        )
+    print("=" * 88)
 
 
 # ---------------------------------------------------------------------------
@@ -549,9 +617,17 @@ def main():
     optimal_points = make_plot(data_by_C, args.output, incomplete_C_budgets)
 
     # Figure 3: Compute vs Optimal Training Tokens (power law fit)
+    fit_result = None
     if optimal_points:
         tokens_output = args.output.replace(".png", "_optimal_tokens.png")
-        make_optimal_tokens_plot(optimal_points, tokens_output)
+        fit_result = make_optimal_tokens_plot(optimal_points, tokens_output)
+
+    # Comparison table: your fit vs Llama-3 paper
+    if fit_result is not None:
+        alpha, A = fit_result
+        # Show all sweep C budgets plus a few reference scales
+        table_budgets = sorted(set(list(GBS_BY_COMPUTE.keys()) + [1e21, 3.8e25]))
+        print_optimal_allocation_table(alpha, A, table_budgets)
 
 
 if __name__ == "__main__":
