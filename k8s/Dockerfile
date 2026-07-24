@@ -37,11 +37,11 @@ RUN pip install --no-cache-dir \
 # ── Core build tools ──────────────────────────────────────────────────────────
 RUN pip install --no-cache-dir pybind11 psutil
 
-# ── Megatron-LM (fork, scaling-laws branch) ──────────────────────────────────
+# ── Megatron-LM (fork, scaling_laws branch) ──────────────────────────────────
 WORKDIR /workspace
 RUN git clone https://github.com/martin-kukla/Megatron-LM.git \
     && cd Megatron-LM \
-    && git checkout scaling-laws \
+    && git checkout scaling_laws \
     && pip install --no-cache-dir -e .
 
 # ── Pre-compile helpers_cpp with the correct Python 3.12 suffix ───────────────
