@@ -2,7 +2,7 @@
 #  Megatron-LM training image
 #  PyTorch 2.11 + CUDA 12.8 + TransformerEngine 2.16.1 + Apex + Flash-Attn 4
 # =============================================================================
-FROM nvidia/cuda:12.8.1-cudnn9-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.2-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -53,9 +53,10 @@ RUN cd /workspace/Megatron-LM/megatron/core/datasets && \
         helpers.cpp -o "helpers_cpp${LIBEXT}"
 
 # ── Transformer Engine 2.16.1 ─────────────────────────────────────────────────
-# CPATH provides the NCCL headers bundled with the PyTorch NCCL wheel.
-RUN NCCL_INCLUDE=$(python3 -c "import site; print(site.getsitepackages()[0])")/nvidia/nccl/include && \
-    CPATH="${NCCL_INCLUDE}" \
+# PyTorch ships nvidia-nccl-cu12 and nvidia-cudnn-cu12 as Python packages;
+# both provide C headers that TE needs at build time.
+RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    CPATH="${SITE}/nvidia/nccl/include:${SITE}/nvidia/cudnn/include" \
     pip install --no-cache-dir \
         "transformer_engine[pytorch]==2.16.1" \
         --no-build-isolation
