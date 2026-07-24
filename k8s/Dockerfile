@@ -2,7 +2,7 @@
 #  Megatron-LM training image
 #  PyTorch 2.11 + CUDA 12.8 + TransformerEngine 2.16.1 + Apex + Flash-Attn 4
 # =============================================================================
-FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.1-cudnn9-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
