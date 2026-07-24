@@ -582,6 +582,21 @@ PAPER_ALPHA = 0.537
 PAPER_A     = 0.29  # tokens
 
 
+def _fmt_eta(hours: float) -> str:
+    """Format an ETA duration in hours to a human-readable string.
+
+    Examples: 0.25 -> '15m', 1.5 -> '1h 30m', 26.0 -> '1d 2h'
+    """
+    total_min = int(round(hours * 60))
+    days, remainder = divmod(total_min, 1440)
+    hrs, mins = divmod(remainder, 60)
+    if days > 0:
+        return f"{days}d {hrs}h"
+    if hrs > 0:
+        return f"{hrs}h {mins}m"
+    return f"{mins}m"
+
+
 def _fmt_tokens(n: float) -> str:
     """Format a token count as e.g. '15.3B' or '1.26T'."""
     if n >= 1e12:
@@ -702,8 +717,8 @@ def main():
 
     # Extract validation losses
     data_by_C = defaultdict(list)
-    print(f"{'Directory':<65s} {'C':>10s} {'Tokens':>12s} {'Params':>10s} {'Val Loss':>10s} {'Step':>8s} {'Expected':>8s} {'Duration':>10s} {'Status':>12s}")
-    print("-" * 155)
+    print(f"{'Directory':<65s} {'C':>10s} {'Tokens':>12s} {'Params':>10s} {'Val Loss':>10s} {'Step':>8s} {'Expected':>8s} {'Duration':>10s} {'Status':>30s}")
+    print("-" * 175)
 
     csv_lines = ["directory,compute_C,tokens_D,params_N,hidden,layers,val_loss,step,expected_steps,duration_hours,complete"]
     incomplete_count = 0
@@ -726,9 +741,18 @@ def main():
         )
 
         if loss is not None and not is_complete:
-            status_label = "INCOMPLETE"
             incomplete_count += 1
             incomplete_C_budgets.add(run["C"])
+            # Compute % complete and ETA
+            pct = (step / expected * 100) if step is not None and expected > 0 else None
+            if pct is not None and duration_hours is not None and pct > 0:
+                fraction_done = pct / 100.0
+                eta_hours = duration_hours / fraction_done - duration_hours
+                eta_str = _fmt_eta(eta_hours)
+            else:
+                eta_str = "N/A"
+            pct_str = f"{pct:.1f}%" if pct is not None else "N/A"
+            status_label = f"INCOMPLETE  {pct_str}  ETA:{eta_str}"
         elif loss is not None:
             status_label = "OK"
         else:
@@ -747,7 +771,7 @@ def main():
         print(
             f"{run['dirname']:<65s} {format_compute(run['C']):>10s} "
             f"{tokens:>12.2e} {run['N']:>10.0f} {loss_str:>10s} {step_str:>8s} "
-            f"{expected:>8d} {dur_str:>10s} {status_label:>12s}"
+            f"{expected:>8d} {dur_str:>10s}  {status_label}"
         )
 
         csv_lines.append(
