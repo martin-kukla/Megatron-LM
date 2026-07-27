@@ -350,6 +350,21 @@ def main():
     parser.add_argument(
         "--max-hidden", type=int, default=8192, help="Maximum hidden size (default: 8192)"
     )
+    parser.add_argument(
+        "--sweep-points",
+        type=int,
+        default=9,
+        metavar="N",
+        help=(
+            "Number of model sizes per IsoFLOP sweep (default: 9). "
+            "Controls grid density around the Chinchilla optimum:\n"
+            "  5  = [0.25, 0.50, 1.0, 2.0, 4.0]x D_chin  (2x steps, legacy)\n"
+            "  9  = sqrt(2) steps — recommended, matches Chinchilla/LLaMA-3 density\n"
+            " 13  = 2^0.25 steps — fine-grained for high-precision sweeps\n"
+            "  N  = N log-uniform points from 0.25x to 4x (arbitrary).\n"
+            "The 5-point existing runs slot into the 9-point grid at positions 0,2,4,6,8."
+        ),
+    )
     args = parser.parse_args()
 
     # Chinchilla-optimal D: C = 6ND, D = 20N  →  D_opt = sqrt(C × 10/3)
@@ -382,13 +397,46 @@ def main():
             print(f"   C={C_ref:.0e}  →  {tok_str} tokens/batch  →  GBS={gbs_ref}{marker}")
         print(f"{'='*70}")
 
-        # Sweep D around the Chinchilla optimum; GBS is FIXED
-        multipliers = [0.25, 0.5, 1.0, 2.0, 4.0]
+        # ---------------------------------------------------------------------------
+        # Sweep D around the Chinchilla optimum using √2-spacing in N (model size),
+        # matching Chinchilla Appendix B ("powers of √2 from 70M to 16B, 17 sizes")
+        # and LLaMA-3 Section 3.1 ("40M to 16B").
+        #
+        # Grid options (selectable via --sweep-points):
+        #   5  → [0.25, 0.50, 1.0, 2.0, 4.0]× D_chin  (2× steps, legacy)
+        #   9  → [0.25, 0.35, 0.50, 0.71, 1.0, 1.41, 2.0, 2.83, 4.0]× D_chin
+        #         (√2 steps — recommended, matches paper density)
+        #  13  → even finer (√2^0.5 steps), for high-precision sweeps
+        #
+        # In D/N space the 9-point grid gives: 1.25, 2.5, 5, 10, 20, 40, 80, 160, 320
+        # — a factor of √2 ≈ 1.41 between adjacent points instead of 2×.
+        # ---------------------------------------------------------------------------
+        import math as _math
+        _n_pts = args.sweep_points
+        if _n_pts == 5:
+            multipliers = [0.25, 0.5, 1.0, 2.0, 4.0]
+        elif _n_pts == 9:
+            # √2 spacing: 0.25 × (√2)^k for k = 0..8
+            multipliers = [round(0.25 * (_math.sqrt(2) ** k), 4) for k in range(9)]
+        elif _n_pts == 13:
+            # √2^0.5 = 2^0.25 spacing: 0.25 × (2^0.25)^k for k = 0..12
+            multipliers = [round(0.25 * (2 ** (0.25 * k)), 4) for k in range(13)]
+        else:
+            # Arbitrary: log-uniformly space _n_pts points from 0.25× to 4×
+            lo, hi = _math.log2(0.25), _math.log2(4.0)
+            multipliers = [round(2 ** (lo + (hi - lo) * i / (_n_pts - 1)), 4)
+                           for i in range(_n_pts)]
+
+        print(f" Sweep grid: {len(multipliers)} points at √2 spacing "
+              f"({multipliers[0]:.3f}× – {multipliers[-1]:.3f}× D_chin)")
+        print(f" TIP: existing 5-point runs slot into the 9-point grid at indices "
+              f"0, 2, 4, 6, 8 — no reruns needed.")
+
         all_commands = []
         for mult in multipliers:
             D = D_opt * mult
             print(f"\n\n{'─'*70}")
-            print(f" SWEEP: {mult:.2f}x Chinchilla-optimal tokens  →  D = {D:.2e}")
+            print(f" SWEEP: {mult:.3f}x Chinchilla-optimal tokens  →  D = {D:.2e}")
             print(f"{'─'*70}")
             cmd = compute_and_print_table(args.flops, D, gbs, args)
             if cmd:
