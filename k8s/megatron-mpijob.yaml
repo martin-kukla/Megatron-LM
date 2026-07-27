@@ -1,0 +1,208 @@
+apiVersion: kubeflow.org/v1
+kind: MPIJob
+metadata:
+  name: megatron-train
+  namespace: default
+spec:
+  # 1 MPI slot per node (the wrapper then launches 8 GPU processes via torchrun)
+  slotsPerWorker: 1
+  runPolicy:
+    cleanPodPolicy: Running
+  mpiReplicaSpecs:
+
+    # ── Launcher ──────────────────────────────────────────────────────────────
+    # Runs mpirun -np 4 --npernode 1, invoking mpi-wrapper.sh on each of the
+    # 4 worker pods. The wrapper translates MPI rank/size into torchrun args.
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          containers:
+          - name: mpi-launcher
+            image: ghcr.io/martin-kukla/megatron-lm:latest
+            imagePullPolicy: Always
+            env:
+            - name: NCCL_NET
+              value: "Socket"
+            - name: NCCL_IB_DISABLE
+              value: "1"
+            - name: NVTE_ALLOW_UNSAFE_PICKLE_EXTRA_STATE
+              value: "1"
+            - name: NVTE_FUSED_ATTN
+              value: "0"
+            - name: MASTER_PORT
+              value: "6000"
+            # MASTER_ADDR must match the launcher pod's DNS name.
+            # Format: <jobname>-launcher-0.<jobname>.<namespace>.svc.cluster.local
+            - name: MASTER_ADDR
+              value: "megatron-train-launcher-0.megatron-train.default.svc.cluster.local"
+            command:
+            - mpirun
+            - --allow-run-as-root
+            - -np
+            - "4"              # number of nodes
+            - --npernode
+            - "1"              # 1 MPI rank per node; torchrun handles the 8 GPUs
+            - --bind-to
+            - none
+            - -x
+            - NCCL_NET
+            - -x
+            - NCCL_IB_DISABLE
+            - -x
+            - NVTE_ALLOW_UNSAFE_PICKLE_EXTRA_STATE
+            - -x
+            - NVTE_FUSED_ATTN
+            - -x
+            - MASTER_ADDR
+            - -x
+            - MASTER_PORT
+            - bash
+            - -c
+            - |
+              cd /workspace/Megatron-LM
+              echo "[launcher] NODE_RANK=${OMPI_COMM_WORLD_RANK:-0} NUM_NODES=${OMPI_COMM_WORLD_SIZE:-1} MASTER_ADDR=${MASTER_ADDR}"
+              exec torchrun \
+                --nproc_per_node=8 \
+                --nnodes=${OMPI_COMM_WORLD_SIZE:-1} \
+                --node_rank=${OMPI_COMM_WORLD_RANK:-0} \
+                --master_addr=${MASTER_ADDR} \
+                --master_port=${MASTER_PORT:-6000} \
+                pretrain_gpt.py \
+                --use-mcore-models \
+                --num-layers 32 \
+                --hidden-size 4096 \
+                --ffn-hidden-size 14336 \
+                --num-attention-heads 32 \
+                --group-query-attention \
+                --num-query-groups 8 \
+                --kv-channels 128 \
+                --seq-length 8192 \
+                --max-position-embeddings 8192 \
+                --position-embedding-type rope \
+                --rotary-base 1000000 \
+                --rotary-percent 1.0 \
+                --attention-dropout 0.0 \
+                --hidden-dropout 0.0 \
+                --swiglu \
+                --normalization RMSNorm \
+                --init-method-std 0.0134 \
+                --attention-backend fused \
+                --apply-layernorm-1p \
+                --untie-embeddings-and-output-weights \
+                --disable-bias-linear \
+                --micro-batch-size 1 \
+                --global-batch-size 128 \
+                --train-samples 1953125000 \
+                --lr-decay-samples 1949218748 \
+                --lr-warmup-samples 3906252 \
+                --lr 0.00015 \
+                --min-lr 0.00001 \
+                --decoupled-lr 5.0e-4 \
+                --decoupled-min-lr 4.5e-5 \
+                --lr-decay-style cosine \
+                --clip-grad 1.0 \
+                --weight-decay 0.1 \
+                --adam-beta1 0.9 \
+                --adam-beta2 0.95 \
+                --bf16 \
+                --grad-reduce-in-bf16 \
+                --cross-entropy-loss-fusion \
+                --calculate-per-token-loss \
+                --manual-gc \
+                --empty-unused-memory-level 1 \
+                --exit-duration-in-mins 235 \
+                --use-distributed-optimizer \
+                --overlap-grad-reduce \
+                --overlap-param-gather \
+                --fp8-format hybrid \
+                --fp8-amax-history-len 1024 \
+                --fp8-amax-compute-algo max \
+                --fp8-param-gather \
+                --tensor-model-parallel-size 1 \
+                --context-parallel-size 1 \
+                --sequence-parallel \
+                --data-path /data/pile_tokenized/pile_llama3_text_document \
+                --tokenizer-type HuggingFaceTokenizer \
+                --tokenizer-model meta-llama/Meta-Llama-3-8B \
+                --data-cache-path /checkpoints/benchmark_cache_llama3_8b_fp8 \
+                --split '99,1,0' \
+                --no-create-attention-mask-in-dataloader \
+                --no-mmap-bin-files \
+                --num-workers 1 \
+                --vocab-size 128256 \
+                --log-interval 1 \
+                --eval-iters 32 \
+                --eval-interval 100 \
+                --save-interval 1000 \
+                --log-throughput \
+                --profile \
+                --profile-step-start 4 \
+                --profile-step-end 6 \
+                --ckpt-format torch_dist \
+                --distributed-timeout-minutes 60 \
+                --save /checkpoints/llama3_8b_fp8 \
+                --load /checkpoints/llama3_8b_fp8 \
+                --tensorboard-dir /tensorboard_logs/llama3_8b_fp8
+
+            volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: tensorboard
+              mountPath: /tensorboard_logs
+          volumes:
+          - name: data
+            persistentVolumeClaim:
+              claimName: pile-data-pvc        # ← replace with your PVC
+          - name: checkpoints
+            persistentVolumeClaim:
+              claimName: checkpoints-pvc      # ← replace with your PVC
+          - name: tensorboard
+            persistentVolumeClaim:
+              claimName: tensorboard-pvc      # ← replace with your PVC
+
+    # ── Workers ───────────────────────────────────────────────────────────────
+    # 4 pods × 8 GPUs = 32 total GPUs.
+    Worker:
+      replicas: 4
+      template:
+        spec:
+          containers:
+          - name: mpi-worker
+            image: ghcr.io/martin-kukla/megatron-lm:latest
+            imagePullPolicy: Always
+            resources:
+              limits:
+                nvidia.com/gpu: "8"
+            env:
+            - name: NCCL_NET
+              value: "Socket"
+            - name: NCCL_IB_DISABLE
+              value: "1"
+            - name: NVTE_ALLOW_UNSAFE_PICKLE_EXTRA_STATE
+              value: "1"
+            - name: NVTE_FUSED_ATTN
+              value: "0"
+            volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: tensorboard
+              mountPath: /tensorboard_logs
+          volumes:
+          - name: data
+            persistentVolumeClaim:
+              claimName: pile-data-pvc
+          - name: checkpoints
+            persistentVolumeClaim:
+              claimName: checkpoints-pvc
+          - name: tensorboard
+            persistentVolumeClaim:
+              claimName: tensorboard-pvc
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
