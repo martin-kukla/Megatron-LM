@@ -1,0 +1,102 @@
+# =============================================================================
+#  GCS Fuse-backed PersistentVolumes for multi-node Megatron training.
+#
+#  Replace mkukla-megatron-training with your actual GCS bucket name.
+#
+#  Apply with: kubectl apply -f k8s/storage.yaml
+# =============================================================================
+
+# ── Data (pile tokenized) — read-only ────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pile-data-pv
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: gcsfuse.csi.storage.gke.io
+    volumeHandle: mkukla-megatron-training/pile_tokenized   # ← replace mkukla-megatron-training
+    volumeAttributes:
+      mountOptions: "implicit-dirs,file-cache:enable-parallel-downloads:true"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pile-data-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 500Gi
+  volumeName: pile-data-pv
+  storageClassName: ""
+---
+
+# ── Checkpoints — read-write ──────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: checkpoints-pv
+spec:
+  capacity:
+    storage: 200Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: gcsfuse.csi.storage.gke.io
+    volumeHandle: mkukla-megatron-training/checkpoints      # ← replace mkukla-megatron-training
+    volumeAttributes:
+      mountOptions: "implicit-dirs"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: checkpoints-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 200Gi
+  volumeName: checkpoints-pv
+  storageClassName: ""
+---
+
+# ── TensorBoard logs — read-write ─────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: tensorboard-pv
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: gcsfuse.csi.storage.gke.io
+    volumeHandle: mkukla-megatron-training/tensorboard_logs # ← replace mkukla-megatron-training
+    volumeAttributes:
+      mountOptions: "implicit-dirs"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tensorboard-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  volumeName: tensorboard-pv
+  storageClassName: ""
