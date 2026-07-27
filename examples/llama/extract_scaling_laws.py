@@ -299,8 +299,7 @@ def format_compute(c: float) -> str:
     return f"{mantissa}e{exp}"
 
 
-def make_plot(data_by_C: dict, output_path: str, incomplete_C_budgets: set | None = None,
-             excluded_by_C: dict | None = None):
+def make_plot(data_by_C: dict, output_path: str, incomplete_C_budgets: set | None = None):
     """
     Produce an IsoFLOP scaling law plot matching the Llama-3 paper (Figure 2).
 
@@ -309,8 +308,6 @@ def make_plot(data_by_C: dict, output_path: str, incomplete_C_budgets: set | Non
     - All data points are plotted as same-colored circles per IsoFLOP curve.
     - A second-degree polynomial (parabola) is fitted in log-token space.
     - The minimum of each parabola is marked with a pink diamond (compute-optimal).
-    - If excluded_by_C is provided, those over-parameterized points are overlaid
-      as hollow grey X markers (excluded from the fit, shown for reference).
     """
     fig, ax = plt.subplots(figsize=(10, 7))
 
@@ -373,19 +370,6 @@ def make_plot(data_by_C: dict, output_path: str, incomplete_C_budgets: set | Non
 
         legend_entries.append((color, label))
 
-    # Overlay excluded over-parameterized points as hollow grey X markers
-    if excluded_by_C:
-        first_excl = True
-        for C_excl, run in sorted(excluded_by_C.items()):
-            excl_label = "excluded (over-param.)" if first_excl else None
-            ax.scatter(
-                [run["tokens"]], [run["loss"]],
-                facecolors="none", edgecolors="#555555",
-                marker="x", s=80, linewidths=1.5, zorder=8,
-                label=excl_label,
-            )
-            first_excl = False
-
     # X-axis log scale
     ax.set_xscale("log")
     ax.set_xlabel("Training Tokens", fontsize=14)
@@ -394,18 +378,9 @@ def make_plot(data_by_C: dict, output_path: str, incomplete_C_budgets: set | Non
 
     # Legend (manual, matching the paper style)
     from matplotlib.lines import Line2D
-    import matplotlib.patches as mpatches
     legend_handles = [
         Line2D([0], [0], color=c, linewidth=3, label=l) for c, l in legend_entries
     ]
-    # Add excluded-point marker to legend when --exclude-overparameterized is active
-    if excluded_by_C:
-        excl_handle = Line2D(
-            [0], [0], marker="x", color="#555555", linestyle="None",
-            markersize=9, markeredgewidth=1.5,
-            label="excluded (over-param.)",
-        )
-        legend_handles.append(excl_handle)
     legend = ax.legend(
         handles=legend_handles,
         title="Compute",
@@ -708,19 +683,6 @@ def main():
         action="store_true",
         help="Just list available TensorBoard scalar tags for each run and exit.",
     )
-    parser.add_argument(
-        "--exclude-overparameterized",
-        action="store_true",
-        help=(
-            "For each compute budget, exclude the most over-parameterized run "
-            "(the one with the fewest training tokens, i.e. the 0.25x Chinchilla point) "
-            "from the parabola fit and Figure 3 power law fit. "
-            "Useful when short over-parameterized runs have a disproportionately large "
-            "LR-warmup fraction, which biases the parabola minimum leftward and "
-            "underestimates the scaling exponent alpha. "
-            "Excluded points are still shown on the IsoFLOP plot as hollow X markers."
-        ),
-    )
     args = parser.parse_args()
 
     if not os.path.isdir(args.tb_root):
@@ -834,32 +796,7 @@ def main():
     if incomplete_count > 0:
         print(f"\n⚠️  {incomplete_count} run(s) marked INCOMPLETE (last step far from expected total).")
 
-    # --exclude-overparameterized: for each C budget, remove the run with the
-    # fewest training tokens (= 0.25x Chinchilla, largest model, shortest run).
-    # These runs have the highest LR-warmup fraction, which artificially lifts
-    # the left side of each IsoFLOP parabola and biases the minimum rightward
-    # at small C more than at large C — causing alpha to be underestimated.
-    # We keep the excluded points visible on the plot as hollow markers.
-    excluded_by_C: dict[float, dict] = {}  # C -> the excluded run dict
-    if args.exclude_overparameterized:
-        for C_val, run_list in data_by_C.items():
-            if len(run_list) < 2:
-                continue  # need at least 2 points to fit a parabola anyway
-            # Identify over-parameterized run = minimum token count
-            min_idx = min(range(len(run_list)), key=lambda i: run_list[i]["tokens"])
-            excluded_run = run_list.pop(min_idx)
-            excluded_by_C[C_val] = excluded_run
-        if excluded_by_C:
-            print(f"\n🔕 --exclude-overparameterized: dropped {len(excluded_by_C)} runs "
-                  f"(one per compute budget) from parabola/power-law fits:")
-            for C_val in sorted(excluded_by_C):
-                ex = excluded_by_C[C_val]
-                dn = ex["tokens"] / ex["N"]
-                print(
-                    f"   C={format_compute(C_val):>6s}  "
-                    f"tokens={ex['tokens']:.2e}  N={ex['N']:.2e}  "
-                    f"D/N={dn:.1f}  → {ex['dirname']}"
-                )
+
 
     # Save CSV
     with open(args.csv, "w") as f:
@@ -878,10 +815,7 @@ def main():
               f"{", ".join(format_compute(c) for c in sorted(incomplete_C_budgets))}")
 
     print(f"\n📈 Plotting {total_points} data points across {len(data_by_C)} compute budgets...")
-    optimal_points = make_plot(
-        data_by_C, args.output, incomplete_C_budgets,
-        excluded_by_C=excluded_by_C if args.exclude_overparameterized else {},
-    )
+    optimal_points = make_plot(data_by_C, args.output, incomplete_C_budgets)
 
     # Figure 3: Compute vs Optimal Training Tokens (power law fit)
     fit_result = None
