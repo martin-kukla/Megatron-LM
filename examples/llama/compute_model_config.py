@@ -365,6 +365,16 @@ def main():
             "The 5-point existing runs slot into the 9-point grid at positions 0,2,4,6,8."
         ),
     )
+    parser.add_argument(
+        "--only-new",
+        action="store_true",
+        help=(
+            "When used with --sweep-points 9, print only the 4 intermediate points "
+            "(multipliers 0.354, 0.707, 1.414, 2.828) that are NOT in the legacy "
+            "5-point grid. Skips the existing runs at indices 0,2,4,6,8. "
+            "Use this to get exactly the commands you still need to launch."
+        ),
+    )
     args = parser.parse_args()
 
     # Chinchilla-optimal D: C = 6ND, D = 20N  →  D_opt = sqrt(C × 10/3)
@@ -432,11 +442,24 @@ def main():
         print(f" TIP: existing 5-point runs slot into the 9-point grid at indices "
               f"0, 2, 4, 6, 8 — no reruns needed.")
 
+        # When --only-new is set, keep only the odd-indexed multipliers
+        # (the 4 intermediate points between the legacy 5-point runs).
+        indexed_multipliers = list(enumerate(multipliers))
+        if args.only_new:
+            if args.sweep_points != 9:
+                print("  [warn] --only-new is only meaningful with --sweep-points 9; ignoring.")
+            else:
+                indexed_multipliers = [(i, m) for i, m in indexed_multipliers if i % 2 == 1]
+                print(f" --only-new: showing {len(indexed_multipliers)} new intermediate points only")
+                print(f"             (existing 5 runs at 0.25x, 0.50x, 1.0x, 2.0x, 4.0x are skipped)")
+
         all_commands = []
-        for mult in multipliers:
+        for idx, mult in indexed_multipliers:
             D = D_opt * mult
+            is_new = (idx % 2 == 1) and args.sweep_points == 9
+            tag = "  ★ NEW" if is_new else ""
             print(f"\n\n{'─'*70}")
-            print(f" SWEEP: {mult:.3f}x Chinchilla-optimal tokens  →  D = {D:.2e}")
+            print(f" SWEEP: {mult:.4f}x Chinchilla-optimal tokens  →  D = {D:.2e}{tag}")
             print(f"{'─'*70}")
             cmd = compute_and_print_table(args.flops, D, gbs, args)
             if cmd:
